@@ -1,42 +1,76 @@
-import os
-from dotenv import load_dotenv
+from pathlib import Path
 
-# 加载项目根目录下的 .env 文件
-load_dotenv()
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Config:
-    """
-    OpenClaw 全局配置中心
-    所有敏感信息均从 .env 读取，不在此处硬编码。
-    """
+class Settings(BaseSettings):
+    app_name: str = "workflow3"
+    app_env: str = "dev"
+    app_host: str = "0.0.0.0"
+    app_port: int = 8000
+    log_level: str = "INFO"
 
-    # --- 1. 飞书 (Lark) 配置 ---
-    LARK_APP_ID = os.getenv("LARK_APP_ID")
-    LARK_APP_SECRET = os.getenv("LARK_APP_SECRET")
-    LARK_FOLDER_TOKEN = os.getenv("LARK_FOLDER_TOKEN")
+    feishu_app_id: str = ""
+    feishu_app_secret: str = ""
+    feishu_bot_name: str = "Workflow3 Agent Bot"
+    ngrok_public_url: str = ""
 
-    # --- 2. 阿里云 Qwen 配置 (从 .env 读取) ---
-    QWEN_API_KEY = os.getenv("QWEN_API_KEY")
-    QWEN_BASE_URL = os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-    QWEN_MODEL_NAME = os.getenv("QWEN_MODEL_NAME", "qwen-plus")
+    volcengine_api_key: str = ""
+    volcengine_base_url: str = ""
+    volcengine_model: str = "ark-code-latest"
 
-    # --- 3. 路径配置 (自动定位 E 盘项目目录) ---
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    feishu_drive_folder_token: str = ""
 
-    # 论文存储目录
-    PAPERS_DIR = os.path.join(BASE_DIR, "papers")
-    # 结果输出目录
-    OUTPUT_DIR = os.path.join(BASE_DIR, "output")
+    sqlite_db_path: str = "./runtime_data/workflow3.db"
+    data_root: str = "./runtime_data"
 
-    # 自动创建必要的文件夹 (防止初次运行报错)
-    @classmethod
-    def init_folders(cls):
-        for path in [cls.PAPERS_DIR, cls.OUTPUT_DIR]:
-            if not os.path.exists(path):
-                os.makedirs(path)
-                print(f"📁 已自动创建文件夹: {path}")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    @property
+    def data_root_path(self) -> Path:
+        return Path(self.data_root).resolve()
+
+    @property
+    def sqlite_db_path_obj(self) -> Path:
+        return Path(self.sqlite_db_path).resolve()
+
+    @property
+    def logs_dir(self) -> Path:
+        return self.data_root_path / "logs"
+
+    @property
+    def temp_dir(self) -> Path:
+        return self.data_root_path / "temp"
+
+    @property
+    def papers_dir(self) -> Path:
+        return self.data_root_path / "papers"
+
+    def validate_required_for_current_stage(self) -> None:
+        missing = []
+
+        if not self.app_name:
+            missing.append("APP_NAME")
+        if not self.data_root:
+            missing.append("DATA_ROOT")
+        if not self.sqlite_db_path:
+            missing.append("SQLITE_DB_PATH")
+
+        # Step 4 需要
+        if not self.feishu_app_id:
+            missing.append("FEISHU_APP_ID")
+        if not self.feishu_app_secret:
+            missing.append("FEISHU_APP_SECRET")
+        if not self.ngrok_public_url:
+            missing.append("NGROK_PUBLIC_URL")
+
+        if missing:
+            raise ValueError(f"缺少必要配置: {', '.join(missing)}")
 
 
-# 初始化文件夹
-Config.init_folders()
+settings = Settings()
+settings.validate_required_for_current_stage()

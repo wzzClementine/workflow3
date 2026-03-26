@@ -1,42 +1,16 @@
-# --- 核心安全（最关键！） ---
-.env
-*.env
-.venv/
-venv/
-env/
-# 包含敏感信息的配置文件
-config.json
-secrets.json
-
-# --- Python 编译与缓存 ---
 __pycache__/
 *.py[cod]
-*$py.class
-.pytest_cache/
-.mypy_cache/
+*.pyo
+*.pyd
 
-# --- 操作系统临时文件 ---
-.DS_Store
-Thumbs.db
-desktop.ini
+.env
 
-# --- 开发工具 (VS Code / PyCharm) ---
 .vscode/
 .idea/
-*.swp
-*.swo
 
-# --- OpenClaw / 数据采集生成的临时文件 ---
-# 如果你的 Agent 下载了论文或生成了日志，建议忽略这些目录
-downloads/
-output/
-logs/
-*.log
-temp/
-data/*.csv
-data/*.pdf
+runtime_data/
+*.db
+*.sqlite3
 
-# --- 打包与分发 ---
-dist/
-build/
-*.egg-info/
+.DS_Store
+Thumbs.db

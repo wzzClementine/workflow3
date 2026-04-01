@@ -18,7 +18,7 @@ def render_pdf_pages(
     solution_pdf_path: str,
     blank_paper_name: str,
     solution_paper_name: str,
-    dpi: int = 200,
+    dpi: int = 300,
 ) -> dict[str, Any]:
     """
     将空白试卷 PDF 和解析试卷 PDF 分别渲染为页图。

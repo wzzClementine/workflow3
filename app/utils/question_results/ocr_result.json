@@ -1,0 +1,658 @@
+{
+  "TextDetections": [
+    {
+      "DetectedText": "1",
+      "Confidence": 96,
+      "Polygon": [
+        {
+          "X": 404,
+          "Y": 209
+        },
+        {
+          "X": 470,
+          "Y": 209
+        },
+        {
+          "X": 470,
+          "Y": 252
+        },
+        {
+          "X": 404,
+          "Y": 252
+        }
+      ],
+      "AdvancedInfo": "{\"Parag\":{\"ParagNo\":1}}",
+      "ItemPolygon": {
+        "X": 404,
+        "Y": 209,
+        "Width": 66,
+        "Height": 43
+      },
+      "Words": [],
+      "WordCoordPoint": []
+    },
+    {
+      "DetectedText": "1",
+      "Confidence": 98,
+      "Polygon": [
+        {
+          "X": 510,
+          "Y": 212
+        },
+        {
+          "X": 577,
+          "Y": 212
+        },
+        {
+          "X": 577,
+          "Y": 256
+        },
+        {
+          "X": 510,
+          "Y": 256
+        }
+      ],
+      "AdvancedInfo": "{\"Parag\":{\"ParagNo\":2}}",
+      "ItemPolygon": {
+        "X": 510,
+        "Y": 212,
+        "Width": 67,
+        "Height": 44
+      },
+      "Words": [],
+      "WordCoordPoint": []
+    },
+    {
+      "DetectedText": "1",
+      "Confidence": 98,
+      "Polygon": [
+        {
+          "X": 766,
+          "Y": 209
+        },
+        {
+          "X": 793,
+          "Y": 209
+        },
+        {
+          "X": 793,
+          "Y": 246
+        },
+        {
+          "X": 766,
+          "Y": 246
+        }
+      ],
+      "AdvancedInfo": "{\"Parag\":{\"ParagNo\":3}}",
+      "ItemPolygon": {
+        "X": 766,
+        "Y": 209,
+        "Width": 27,
+        "Height": 37
+      },
+      "Words": [],
+      "WordCoordPoint": []
+    },
+    {
+      "DetectedText": "1",
+      "Confidence": 99,
+      "Polygon": [
+        {
+          "X": 1368,
+          "Y": 212
+        },
+        {
+          "X": 1395,
+          "Y": 212
+        },
+        {
+          "X": 1395,
+          "Y": 246
+        },
+        {
+          "X": 1368,
+          "Y": 246
+        }
+      ],
+      "AdvancedInfo": "{\"Parag\":{\"ParagNo\":4}}",
+      "ItemPolygon": {
+        "X": 1368,
+        "Y": 212,
+        "Width": 27,
+        "Height": 34
+      },
+      "Words": [],
+      "WordCoordPoint": []
+    },
+    {
+      "DetectedText": "2.1+2+",
+      "Confidence": 78,
+      "Polygon": [
+        {
+          "X": 245,
+          "Y": 230
+        },
+        {
+          "X": 502,
+          "Y": 236
+        },
+        {
+          "X": 500,
+          "Y": 307
+        },
+        {
+          "X": 243,
+          "Y": 301
+        }
+      ],
+      "AdvancedInfo": "{\"Parag\":{\"ParagNo\":5}}",
+      "ItemPolygon": {
+        "X": 243,
+        "Y": 230,
+        "Width": 259,
+        "Height": 77
+      },
+      "Words": [],
+      "WordCoordPoint": []
+    },
+    {
+      "DetectedText": "1+2",
+      "Confidence": 93,
+      "Polygon": [
+        {
+          "X": 500,
+          "Y": 246
+        },
+        {
+          "X": 626,
+          "Y": 246
+        },
+        {
+          "X": 626,
+          "Y": 312
+        },
+        {
+          "X": 500,
+          "Y": 312
+        }
+      ],
+      "AdvancedInfo": "{\"Parag\":{\"ParagNo\":6}}",
+      "ItemPolygon": {
+        "X": 500,
+        "Y": 246,
+        "Width": 126,
+        "Height": 66
+      },
+      "Words": [],
+      "WordCoordPoint": []
+    },
+    {
+      "DetectedText": "+",
+      "Confidence": 96,
+      "Polygon": [
+        {
+          "X": 626,
+          "Y": 242
+        },
+        {
+          "X": 680,
+          "Y": 242
+        },
+        {
+          "X": 680,
+          "Y": 309
+        },
+        {
+          "X": 626,
+          "Y": 309
+        }
+      ],
+      "AdvancedInfo": "{\"Parag\":{\"ParagNo\":7}}",
+      "ItemPolygon": {
+        "X": 626,
+        "Y": 242,
+        "Width": 54,
+        "Height": 67
+      },
+      "Words": [],
+      "WordCoordPoint": []
+    },
+    {
+      "DetectedText": "1+",
+      "Confidence": 98,
+      "Polygon": [
+        {
+          "X": 676,
+          "Y": 262
+        },
+        {
+          "X": 763,
+          "Y": 262
+        },
+        {
+          "X": 763,
+          "Y": 312
+        },
+        {
+          "X": 676,
+          "Y": 312
+        }
+      ],
+      "AdvancedInfo": "{\"Parag\":{\"ParagNo\":8}}",
+      "ItemPolygon": {
+        "X": 676,
+        "Y": 262,
+        "Width": 87,
+        "Height": 50
+      },
+      "Words": [],
+      "WordCoordPoint": []
+    },
+    {
+      "DetectedText": "2",
+      "Confidence": 99,
+      "Polygon": [
+        {
+          "X": 763,
+          "Y": 269
+        },
+        {
+          "X": 799,
+          "Y": 269
+        },
+        {
+          "X": 799,
+          "Y": 309
+        },
+        {
+          "X": 763,
+          "Y": 309
+        }
+      ],
+      "AdvancedInfo": "{\"Parag\":{\"ParagNo\":9}}",
+      "ItemPolygon": {
+        "X": 763,
+        "Y": 269,
+        "Width": 36,
+        "Height": 40
+      },
+      "Words": [],
+      "WordCoordPoint": []
+    },
+    {
+      "DetectedText": "2+",
+      "Confidence": 62,
+      "Polygon": [
+        {
+          "X": 799,
+          "Y": 269
+        },
+        {
+          "X": 839,
+          "Y": 269
+        },
+        {
+          "X": 839,
+          "Y": 309
+        },
+        {
+          "X": 799,
+          "Y": 309
+        }
+      ],
+      "AdvancedInfo": "{\"Parag\":{\"ParagNo\":10}}",
+      "ItemPolygon": {
+        "X": 799,
+        "Y": 269,
+        "Width": 40,
+        "Height": 40
+      },
+      "Words": [],
+      "WordCoordPoint": []
+    },
+    {
+      "DetectedText": "1+2+3+...+100",
+      "Confidence": 99,
+      "Polygon": [
+        {
+          "X": 1172,
+          "Y": 269
+        },
+        {
+          "X": 1588,
+          "Y": 266
+        },
+        {
+          "X": 1588,
+          "Y": 311
+        },
+        {
+          "X": 1172,
+          "Y": 314
+        }
+      ],
+      "AdvancedInfo": "{\"Parag\":{\"ParagNo\":11}}",
+      "ItemPolygon": {
+        "X": 1172,
+        "Y": 266,
+        "Width": 416,
+        "Height": 48
+      },
+      "Words": [],
+      "WordCoordPoint": []
+    },
+    {
+      "DetectedText": "3. 5x+/4=2x+5/4",
+      "Confidence": 87,
+      "Polygon": [
+        {
+          "X": 244,
+          "Y": 1034
+        },
+        {
+          "X": 703,
+          "Y": 1034
+        },
+        {
+          "X": 703,
+          "Y": 1137
+        },
+        {
+          "X": 244,
+          "Y": 1137
+        }
+      ],
+      "AdvancedInfo": "{\"Parag\":{\"ParagNo\":12}}",
+      "ItemPolygon": {
+        "X": 244,
+        "Y": 1034,
+        "Width": 459,
+        "Height": 103
+      },
+      "Words": [],
+      "WordCoordPoint": []
+    },
+    {
+      "DetectedText": "4. 51",
+      "Confidence": 97,
+      "Polygon": [
+        {
+          "X": 247,
+          "Y": 1855
+        },
+        {
+          "X": 247,
+          "Y": 1759
+        },
+        {
+          "X": 420,
+          "Y": 1759
+        },
+        {
+          "X": 420,
+          "Y": 1855
+        }
+      ],
+      "AdvancedInfo": "{\"Parag\":{\"ParagNo\":13}}",
+      "ItemPolygon": {
+        "X": 247,
+        "Y": 1759,
+        "Width": 173,
+        "Height": 96
+      },
+      "Words": [],
+      "WordCoordPoint": []
+    },
+    {
+      "DetectedText": "+",
+      "Confidence": 87,
+      "Polygon": [
+        {
+          "X": 517,
+          "Y": 1855
+        },
+        {
+          "X": 517,
+          "Y": 1762
+        },
+        {
+          "X": 563,
+          "Y": 1762
+        },
+        {
+          "X": 563,
+          "Y": 1855
+        }
+      ],
+      "AdvancedInfo": "{\"Parag\":{\"ParagNo\":14}}",
+      "ItemPolygon": {
+        "X": 517,
+        "Y": 1762,
+        "Width": 46,
+        "Height": 93
+      },
+      "Words": [],
+      "WordCoordPoint": []
+    },
+    {
+      "DetectedText": "71",
+      "Confidence": 87,
+      "Polygon": [
+        {
+          "X": 563,
+          "Y": 1859
+        },
+        {
+          "X": 563,
+          "Y": 1759
+        },
+        {
+          "X": 616,
+          "Y": 1759
+        },
+        {
+          "X": 616,
+          "Y": 1859
+        }
+      ],
+      "AdvancedInfo": "{\"Parag\":{\"ParagNo\":15}}",
+      "ItemPolygon": {
+        "X": 563,
+        "Y": 1759,
+        "Width": 53,
+        "Height": 100
+      },
+      "Words": [],
+      "WordCoordPoint": []
+    },
+    {
+      "DetectedText": "+",
+      "Confidence": 89,
+      "Polygon": [
+        {
+          "X": 756,
+          "Y": 1855
+        },
+        {
+          "X": 756,
+          "Y": 1759
+        },
+        {
+          "X": 806,
+          "Y": 1759
+        },
+        {
+          "X": 806,
+          "Y": 1855
+        }
+      ],
+      "AdvancedInfo": "{\"Parag\":{\"ParagNo\":16}}",
+      "ItemPolygon": {
+        "X": 756,
+        "Y": 1759,
+        "Width": 50,
+        "Height": 96
+      },
+      "Words": [],
+      "WordCoordPoint": []
+    },
+    {
+      "DetectedText": "91",
+      "Confidence": 94,
+      "Polygon": [
+        {
+          "X": 808,
+          "Y": 1861
+        },
+        {
+          "X": 802,
+          "Y": 1761
+        },
+        {
+          "X": 855,
+          "Y": 1758
+        },
+        {
+          "X": 860,
+          "Y": 1858
+        }
+      ],
+      "AdvancedInfo": "{\"Parag\":{\"ParagNo\":17}}",
+      "ItemPolygon": {
+        "X": 802,
+        "Y": 1758,
+        "Width": 58,
+        "Height": 103
+      },
+      "Words": [],
+      "WordCoordPoint": []
+    },
+    {
+      "DetectedText": "5.",
+      "Confidence": 99,
+      "Polygon": [
+        {
+          "X": 252,
+          "Y": 2488
+        },
+        {
+          "X": 316,
+          "Y": 2494
+        },
+        {
+          "X": 310,
+          "Y": 2564
+        },
+        {
+          "X": 246,
+          "Y": 2558
+        }
+      ],
+      "AdvancedInfo": "{\"Parag\":{\"ParagNo\":18}}",
+      "ItemPolygon": {
+        "X": 246,
+        "Y": 2488,
+        "Width": 70,
+        "Height": 76
+      },
+      "Words": [],
+      "WordCoordPoint": []
+    },
+    {
+      "DetectedText": "+",
+      "Confidence": 62,
+      "Polygon": [
+        {
+          "X": 493,
+          "Y": 2484
+        },
+        {
+          "X": 543,
+          "Y": 2484
+        },
+        {
+          "X": 543,
+          "Y": 2580
+        },
+        {
+          "X": 493,
+          "Y": 2580
+        }
+      ],
+      "AdvancedInfo": "{\"Parag\":{\"ParagNo\":19}}",
+      "ItemPolygon": {
+        "X": 493,
+        "Y": 2484,
+        "Width": 50,
+        "Height": 96
+      },
+      "Words": [],
+      "WordCoordPoint": []
+    },
+    {
+      "DetectedText": "18",
+      "Confidence": 61,
+      "Polygon": [
+        {
+          "X": 646,
+          "Y": 2474
+        },
+        {
+          "X": 719,
+          "Y": 2478
+        },
+        {
+          "X": 713,
+          "Y": 2588
+        },
+        {
+          "X": 640,
+          "Y": 2584
+        }
+      ],
+      "AdvancedInfo": "{\"Parag\":{\"ParagNo\":20}}",
+      "ItemPolygon": {
+        "X": 640,
+        "Y": 2474,
+        "Width": 79,
+        "Height": 114
+      },
+      "Words": [],
+      "WordCoordPoint": []
+    },
+    {
+      "DetectedText": "+1÷(0.75+1/4)-1/7",
+      "Confidence": 93,
+      "Polygon": [
+        {
+          "X": 713,
+          "Y": 2484
+        },
+        {
+          "X": 1165,
+          "Y": 2484
+        },
+        {
+          "X": 1165,
+          "Y": 2584
+        },
+        {
+          "X": 713,
+          "Y": 2584
+        }
+      ],
+      "AdvancedInfo": "{\"Parag\":{\"ParagNo\":21}}",
+      "ItemPolygon": {
+        "X": 713,
+        "Y": 2484,
+        "Width": 452,
+        "Height": 100
+      },
+      "Words": [],
+      "WordCoordPoint": []
+    }
+  ],
+  "Angel": 0,
+  "Angle": 0,
+  "RequestId": "c97ab9ca-07f4-4597-ae96-5a7adde2e3bb"
+}

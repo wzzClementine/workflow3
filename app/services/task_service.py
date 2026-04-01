@@ -128,5 +128,14 @@ class TaskService:
         logger.info("Paper attached to task: task_id=%s, paper_id=%s", task_id, paper_id)
         return updated_task
 
+    def get_latest_task(self) -> dict[str, Any] | None:
+        return sqlite_manager.fetch_one(
+            """
+            SELECT *
+            FROM tasks
+            ORDER BY created_at DESC LIMIT 1
+            """
+        )
+
 
 task_service = TaskService()

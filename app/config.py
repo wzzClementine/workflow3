@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     sqlite_db_path: str = "./runtime_data/workflow3.db"
     data_root: str = "./runtime_data"
 
+    tencent_secret_id: str
+    tencent_secret_key: str
+    tencent_region: str = "ap-beijing"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

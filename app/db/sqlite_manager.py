@@ -76,6 +76,40 @@ class SQLiteManager:
             )
             """)
 
+            cursor.execute("""
+                           CREATE TABLE IF NOT EXISTS webhook_events
+                           (
+                               id
+                               INTEGER
+                               PRIMARY
+                               KEY
+                               AUTOINCREMENT,
+                               event_key
+                               TEXT
+                               NOT
+                               NULL
+                               UNIQUE,
+                               event_type
+                               TEXT,
+                               status
+                               TEXT
+                               NOT
+                               NULL,
+                               task_id
+                               TEXT,
+                               detail_json
+                               TEXT,
+                               created_at
+                               TEXT
+                               NOT
+                               NULL,
+                               updated_at
+                               TEXT
+                               NOT
+                               NULL
+                           )
+           """)
+
     def execute(self, sql: str, params: tuple = ()) -> None:
         with self.get_conn() as conn:
             conn.execute(sql, params)

@@ -153,8 +153,15 @@ class AgentService:
             artifacts=artifacts,
         )
 
-        if auto_attach_result and auto_attach_result.get("status") in ("success", "already_attached", "attached"):
-            artifacts = artifact_service.list_by_task_id(task_id) if task_id else []
+        # 无论是否自动挂载成功，只要当前有 task_id，就重新拉一次最新上下文
+        if task_id:
+            session = chat_session_service.get_by_chat_id(chat_id)
+            task_memory = task_memory_service.get_by_task_id(task_id)
+            artifacts = artifact_service.list_by_task_id(task_id)
+        else:
+            session = chat_session_service.get_by_chat_id(chat_id)
+            task_memory = None
+            artifacts = []
 
         retrieved_context = {
             "session": session,

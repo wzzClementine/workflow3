@@ -1,4 +1,5 @@
 from datetime import datetime
+from sqlite3 import IntegrityError
 from typing import Any
 
 from app.db.sqlite_manager import sqlite_manager
@@ -17,34 +18,6 @@ class WebhookEventService:
             """,
             (event_key,),
         )
-
-    def create_processing_event(
-        self,
-        event_key: str,
-        event_type: str,
-        task_id: str | None = None,
-        detail_json: str | None = None,
-    ) -> dict[str, Any] | None:
-        now = datetime.now().isoformat(timespec="seconds")
-
-        sqlite_manager.execute(
-            """
-            INSERT INTO webhook_events (
-                event_key, event_type, status, task_id, detail_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                event_key,
-                event_type,
-                "processing",
-                task_id,
-                detail_json,
-                now,
-                now,
-            ),
-        )
-
-        return self.get_by_event_key(event_key)
 
     def update_event_status(
         self,
@@ -76,15 +49,6 @@ class WebhookEventService:
 
         return self.get_by_event_key(event_key)
 
-    def delete_event(self, event_key: str) -> None:
-        sqlite_manager.execute(
-            """
-            DELETE FROM webhook_events
-            WHERE event_key = ?
-            """,
-            (event_key,),
-        )
-
     def begin_event_once(
         self,
         event_key: str,
@@ -92,22 +56,30 @@ class WebhookEventService:
         task_id: str | None = None,
         detail_json: str | None = None,
     ) -> tuple[bool, dict[str, Any] | None]:
-        """
-        返回:
-        - (True, row): 本次是首次处理，已经写入 processing
-        - (False, row): 已存在，说明重复事件
-        """
-        existing = self.get_by_event_key(event_key)
-        if existing:
-            return False, existing
+        now = datetime.now().isoformat(timespec="seconds")
 
-        row = self.create_processing_event(
-            event_key=event_key,
-            event_type=event_type,
-            task_id=task_id,
-            detail_json=detail_json,
-        )
-        return True, row
+        try:
+            sqlite_manager.execute(
+                """
+                INSERT INTO webhook_events (
+                    event_key, event_type, status, task_id, detail_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_key,
+                    event_type,
+                    "processing",
+                    task_id,
+                    detail_json,
+                    now,
+                    now,
+                ),
+            )
+            return True, self.get_by_event_key(event_key)
+
+        except IntegrityError:
+            existing = self.get_by_event_key(event_key)
+            return False, existing
 
 
 webhook_event_service = WebhookEventService()

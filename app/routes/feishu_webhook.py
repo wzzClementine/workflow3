@@ -1,31 +1,28 @@
 import json
+import shutil
+from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Request
-from fastapi import Query
+from fastapi import APIRouter, Form, Query, Request, UploadFile
 
-from fastapi import APIRouter, UploadFile, Form
-from pathlib import Path
-import shutil
-
-from app.skills.task_update_status import task_update_status
-from app.skills.send_feishu_message import send_feishu_message
-from app.skills.task_create import task_create
+from app.config import settings
+from app.services.agent_service import agent_service
+from app.services.chat_session_service import chat_session_service
+from app.services.webhook_event_service import webhook_event_service
 from app.skills.file_store import (
     file_store_init_task_dirs,
     file_store_save_text,
 )
+from app.services.chat_task_binding_service import chat_task_binding_service
+
 from app.skills.import_pdf_to_workspace import import_pdf_to_workspace
 from app.skills.render_pdf_pages import render_pdf_pages
+from app.skills.send_feishu_message import send_feishu_message
+from app.skills.task_create import task_create
 from app.skills.task_excel_upload import handle_excel_upload
-
-from app.utils.logger import setup_logger
+from app.skills.task_update_status import task_update_status
 from app.utils.download_file_from_feishu import download_file_from_feishu
-
-from app.config import settings
-
-from app.services.task_service import task_service
-from app.services.webhook_event_service import webhook_event_service
+from app.utils.logger import setup_logger
 
 logger = setup_logger(settings.log_level, settings.logs_dir)
 
@@ -35,6 +32,23 @@ router = APIRouter(prefix="/feishu", tags=["feishu"])
 @router.get("/ping")
 def feishu_ping() -> dict:
     return {"message": "feishu route ready"}
+
+
+def _resolve_task_id(chat_id: str) -> str | None:
+    # 1. session
+    session = chat_session_service.get_by_chat_id(chat_id)
+    if session:
+        task_id = session.get("current_task_id")
+        if task_id:
+            return task_id
+
+    # 2. binding
+    task_id = chat_task_binding_service.get_task_id(chat_id)
+    if task_id:
+        chat_session_service.update_current_task(chat_id, task_id)
+        return task_id
+
+    return None
 
 
 @router.post("/event")
@@ -75,14 +89,15 @@ async def feishu_event(request: Request) -> dict[str, Any]:
     except Exception:
         content_obj = {}
 
-    # ----------------------------
-    # 1) 先处理文件消息
-    # ----------------------------
-    if message_type == "file":
-        try:
+    event_key = None
+
+    try:
+        # ----------------------------
+        # 1) 文件消息：下载后统一交给 Agent
+        # ----------------------------
+        if message_type == "file":
             file_key = content_obj.get("file_key")
-            file_name = content_obj.get("file_name") or "uploaded.xlsx"
-            message_id = message.get("message_id")
+            file_name = content_obj.get("file_name") or "uploaded_file"
 
             if not file_key:
                 send_feishu_message(chat_id, "文件消息缺少 file_key，无法处理。")
@@ -92,209 +107,177 @@ async def feishu_event(request: Request) -> dict[str, Any]:
                 send_feishu_message(chat_id, "文件消息缺少 message_id，无法处理。")
                 return {"code": 0, "msg": "ok"}
 
-            # 1. 构造唯一事件键
-            event_key = f"file:{message_id}:{file_key}"
+            event_key = f"feishu_msg:{message_id}"
 
-            # 2. 去重：如果已经存在，直接忽略
+            logger.info(
+                "Start handling file message. event_key=%s, message_id=%s, file_key=%s, file_name=%s",
+                event_key,
+                message_id,
+                file_key,
+                file_name,
+            )
+
+            existing = webhook_event_service.get_by_event_key(event_key)
+            if existing and existing.get("status") == "done":
+                logger.info("Duplicate completed file event ignored: %s", event_key)
+                return {"code": 0, "msg": "ok"}
+
             is_new, existing_event = webhook_event_service.begin_event_once(
                 event_key=event_key,
-                event_type="feishu_file_upload",
+                event_type="feishu_file_message",
                 detail_json=json.dumps(
                     {
                         "chat_id": chat_id,
-                        "file_name": file_name,
                         "message_id": message_id,
                         "file_key": file_key,
+                        "file_name": file_name,
                     },
                     ensure_ascii=False,
                 ),
             )
 
             if not is_new:
-                logger.info("Duplicate file event ignored: %s", event_key)
-
-                # 这里不要重复触发 Step10.4
-                # 可选：给用户发提示，也可以静默忽略
-                send_feishu_message(chat_id, "检测到重复文件事件，已忽略。")
-                return {"code": 0, "msg": "ok"}
-
-            # 3. 获取最近 task
-            task = task_service.get_latest_task()
-            if not task:
-                webhook_event_service.update_event_status(
-                    event_key=event_key,
-                    status="failed",
-                    detail_json=json.dumps(
-                        {"reason": "没有可用任务，请先 create task"},
-                        ensure_ascii=False,
-                    ),
+                logger.info(
+                    "Duplicate file event ignored. event_key=%s, existing_status=%s",
+                    event_key,
+                    existing_event.get("status") if existing_event else None,
                 )
-                send_feishu_message(chat_id, "还没有可用任务，请先发送 create task。")
                 return {"code": 0, "msg": "ok"}
 
-            task_id = task["task_id"]
-
-            # 4. 下载到 temp（推荐）
             temp_dir = Path("runtime_data/temp")
             temp_dir.mkdir(parents=True, exist_ok=True)
             download_path = temp_dir / file_name
 
             download_file_from_feishu(message_id, file_key, download_path)
 
-            # 5. 调用 Step10.4
-            result = handle_excel_upload(
+            chat_session_service.update_last_uploaded_file(
+                chat_id=chat_id,
+                file_name=file_name,
+                file_key=file_key,
+            )
+
+            task_id = _resolve_task_id(chat_id)
+
+            agent_result = agent_service.handle_event(
+                chat_id=chat_id,
+                event_type="file",
+                user_message=None,
                 task_id=task_id,
-                excel_local_path=str(download_path),
+                file_name=file_name,
+                file_key=file_key,
             )
 
-            # 6. 根据结果更新去重事件状态
-            if result.get("step10_4_status") == "success":
-                webhook_event_service.update_event_status(
-                    event_key=event_key,
-                    status="done",
-                    task_id=task_id,
-                    detail_json=json.dumps(result, ensure_ascii=False),
-                )
-                send_feishu_message(
-                    chat_id,
-                    f"Excel 上传成功，Step10.4 已完成。\n"
-                    f"status: {result.get('step10_4_status')}\n"
-                    f"message: {result.get('message')}"
-                )
-            else:
-                webhook_event_service.update_event_status(
-                    event_key=event_key,
-                    status="failed",
-                    task_id=task_id,
-                    detail_json=json.dumps(result, ensure_ascii=False),
-                )
-                send_feishu_message(
-                    chat_id,
-                    f"Excel 已接收，但 Step10.4 执行失败。\n"
-                    f"status: {result.get('step10_4_status')}\n"
-                    f"message: {result.get('message')}"
-                )
-
-        except Exception as e:
-            logger.exception("File message handling failed: %s", e)
-
-            try:
-                event_key = f"file:{message.get('message_id')}:{content_obj.get('file_key')}"
-                existing = webhook_event_service.get_by_event_key(event_key)
-                if existing:
-                    webhook_event_service.update_event_status(
-                        event_key=event_key,
-                        status="failed",
-                        detail_json=json.dumps(
-                            {"error": str(e)},
-                            ensure_ascii=False,
-                        ),
-                    )
-            except Exception:
-                logger.exception("Failed to update webhook event status after file error.")
-
-            send_feishu_message(chat_id, f"Excel 处理失败：{e}")
-
-        return {"code": 0, "msg": "ok"}
-
-    # ----------------------------
-    # 2) 再处理非文本消息
-    # ----------------------------
-    if message_type != "text":
-        send_feishu_message(chat_id, "目前仅支持文本消息和 Excel 文件消息。")
-        return {"code": 0, "msg": "ok"}
-
-    # ----------------------------
-    # 3) 文本消息处理
-    # ----------------------------
-    text = (content_obj.get("text") or "").strip()
-    logger.info("Parsed text: %s", text)
-
-    normalized_text = text.lower()
-
-    if normalized_text == "ping":
-        send_feishu_message(chat_id, "workflow3 服务正常")
-        return {"code": 0, "msg": "ok"}
-
-    elif normalized_text == "create task":
-        user_id = None
-        sender_id = sender.get("sender_id", {})
-        if isinstance(sender_id, dict):
-            user_id = (
-                sender_id.get("open_id")
-                or sender_id.get("user_id")
-                or sender_id.get("union_id")
+            webhook_event_service.update_event_status(
+                event_key=event_key,
+                status="done",
+                task_id=task_id,
+                detail_json=json.dumps(agent_result, ensure_ascii=False),
             )
 
-        task = task_create(created_by=user_id)
+            send_feishu_message(
+                chat_id,
+                agent_result.get("reply", "文件已接收，Agent 已处理。"),
+            )
+            return {"code": 0, "msg": "ok"}
 
-        reply_text = (
-            "任务已创建\n"
-            f"task_id: {task['task_id']}\n"
-            f"status: {task['status']}\n"
-            f"task_type: {task['task_type']}"
+        # ----------------------------
+        # 2) 非文本且非文件
+        # ----------------------------
+        if message_type != "text":
+            send_feishu_message(chat_id, "目前仅支持文本消息和文件消息。")
+            return {"code": 0, "msg": "ok"}
+
+        # ----------------------------
+        # 3) 文本消息：统一交给 Agent
+        # ----------------------------
+        text = (content_obj.get("text") or "").strip()
+        logger.info("Parsed text: %s", text)
+
+        if not message_id:
+            send_feishu_message(chat_id, "文本消息缺少 message_id，无法处理。")
+            return {"code": 0, "msg": "ok"}
+
+        event_key = f"feishu_msg:{message_id}"
+
+        existing = webhook_event_service.get_by_event_key(event_key)
+        if existing and existing.get("status") == "done":
+            logger.info("Duplicate completed text event ignored: %s", event_key)
+            return {"code": 0, "msg": "ok"}
+
+        is_new, existing_event = webhook_event_service.begin_event_once(
+            event_key=event_key,
+            event_type="feishu_text_message",
+            detail_json=json.dumps(
+                {
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "text": text,
+                },
+                ensure_ascii=False,
+            ),
         )
-        send_feishu_message(chat_id, reply_text)
-        return {"code": 0, "msg": "ok"}
 
-    elif normalized_text.startswith("update task "):
-        parts = text.split()
-
-        if len(parts) != 4:
-            send_feishu_message(
-                chat_id,
-                "命令格式错误。\n正确格式：update task <task_id> <status>"
+        if not is_new:
+            logger.info(
+                "Duplicate text event ignored. event_key=%s, existing_status=%s",
+                event_key,
+                existing_event.get("status") if existing_event else None,
             )
             return {"code": 0, "msg": "ok"}
 
-        _, _, task_id, status = parts
-        status = status.strip().lower()
+        chat_session_service.update_last_message(
+            chat_id=chat_id,
+            message_type="text",
+            message_text=text,
+        )
 
-        try:
-            task = task_update_status(task_id=task_id, status=status)
-            reply_text = (
-                "任务状态已更新\n"
-                f"task_id: {task['task_id']}\n"
-                f"status: {task['status']}"
-            )
-            send_feishu_message(chat_id, reply_text)
-        except Exception as e:
-            send_feishu_message(chat_id, f"任务状态更新失败：{e}")
+        task_id = _resolve_task_id(chat_id)
 
-        return {"code": 0, "msg": "ok"}
+        agent_result = agent_service.handle_event(
+            chat_id=chat_id,
+            event_type="text",
+            user_message=text,
+            task_id=task_id,
+            file_name=None,
+            file_key=None,
+        )
 
-    elif normalized_text.startswith("init file store "):
-        parts = text.split()
+        webhook_event_service.update_event_status(
+            event_key=event_key,
+            status="done",
+            task_id=task_id,
+            detail_json=json.dumps(agent_result, ensure_ascii=False),
+        )
 
-        if len(parts) != 4:
-            send_feishu_message(
-                chat_id,
-                "命令格式错误。\n正确格式：init file store <task_id>"
-            )
-            return {"code": 0, "msg": "ok"}
-
-        task_id = parts[3]
-
-        try:
-            dirs = file_store_init_task_dirs(task_id)
-            reply_text = (
-                "文件目录初始化成功\n"
-                f"task_id: {task_id}\n"
-                f"task_root: {dirs['task_root']}"
-            )
-            send_feishu_message(chat_id, reply_text)
-        except Exception as e:
-            send_feishu_message(chat_id, f"文件目录初始化失败：{e}")
-
-        return {"code": 0, "msg": "ok"}
-
-    else:
         send_feishu_message(
             chat_id,
-            "未识别命令。目前支持：ping / create task / update task <task_id> <status> / Excel 文件上传"
+            agent_result.get("reply", "Agent 已处理当前消息。"),
         )
         return {"code": 0, "msg": "ok"}
 
+
+    except Exception as e:
+
+        logger.exception("Feishu event handling failed: %s", e)
+
+        error_text = str(e)
+
+        if "无法从 LLM 输出中解析 JSON" in error_text:
+
+            user_message = "抱歉，我刚才理解这条消息时出现了短暂异常。请再发一次“继续处理刚才那套试卷”。"
+
+        else:
+
+            user_message = f"消息处理失败：{e}"
+
+        send_feishu_message(chat_id, user_message)
+
+        return {"code": 0, "msg": "ok"}
+
+
+# =========================
+# 下面这些测试接口先保留
+# =========================
 
 @router.get("/file-store/init")
 def file_store_init(task_id: str = Query(..., description="任务ID")) -> dict:
@@ -304,6 +287,7 @@ def file_store_init(task_id: str = Query(..., description="任务ID")) -> dict:
         "task_id": task_id,
         "dirs": {k: str(v) for k, v in dirs.items()},
     }
+
 
 @router.get("/file-store/save-text")
 def file_store_save_text_test(
@@ -325,6 +309,7 @@ def file_store_save_text_test(
         "path": str(path),
     }
 
+
 @router.get("/import-pdf-test")
 def import_pdf_test(
     task_id: str = Query(..., description="任务ID"),
@@ -342,6 +327,7 @@ def import_pdf_test(
         "message": "import pdf ok",
         "result": result,
     }
+
 
 @router.get("/render-pdf-pages-test")
 def render_pdf_pages_test(
@@ -374,6 +360,7 @@ def test_send(chat_id: str = Query(..., description="飞书聊天 chat_id")) -> 
         "result": result,
     }
 
+
 @router.get("/task-create-test")
 def task_create_test(created_by: str = "local_test") -> dict[str, Any]:
     task = task_create(created_by=created_by)
@@ -381,6 +368,7 @@ def task_create_test(created_by: str = "local_test") -> dict[str, Any]:
         "message": "task create ok",
         "task": task,
     }
+
 
 @router.get("/task-update-test")
 def task_update_test(
@@ -393,21 +381,16 @@ def task_update_test(
         "task": task,
     }
 
+
 @router.post("/upload-excel")
 async def upload_excel(
     task_id: str = Form(...),
-    file: UploadFile = Form(...)
+    file: UploadFile = Form(...),
 ):
     """
-    飞书上传 Excel 触发 Step10.4
-    Args:
-        task_id: 当前任务 ID（可由系统创建后传给前端）
-        file: 飞书上传的 Excel 文件
-    Returns:
-        dict: 执行结果
+    保留旧测试接口，便于单独验证 Step10.4
     """
     try:
-        # 1. 临时保存 Excel 文件
         tmp_dir = Path("runtime_data/temp")
         tmp_dir.mkdir(parents=True, exist_ok=True)
         tmp_file_path = tmp_dir / file.filename
@@ -415,15 +398,16 @@ async def upload_excel(
         with tmp_file_path.open("wb") as f:
             shutil.copyfileobj(file.file, f)
 
-        # 2. 调用 handle_excel_upload skill
-        result = handle_excel_upload(task_id=task_id, excel_local_path=str(tmp_file_path))
+        result = handle_excel_upload(
+            task_id=task_id,
+            excel_local_path=str(tmp_file_path),
+        )
 
-        # 3. 返回结果给飞书
         return result
 
     except Exception as e:
         return {
             "task_id": task_id,
             "status": "failed",
-            "message": f"上传 Excel 或触发 Step10.4 失败: {e}"
+            "message": f"上传 Excel 或触发 Step10.4 失败: {e}",
         }

@@ -1,5 +1,7 @@
 # Workflow3（完整工程说明文档）
 
+# uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
 用于实现：试卷解析制作 + 小程序上架 的自动化工作流
 
 ---

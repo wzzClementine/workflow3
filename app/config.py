@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     tencent_secret_key: str
     tencent_region: str = "ap-beijing"
 
+    llm_provider: str = "volcengine"
+    llm_mock_mode: bool = True
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

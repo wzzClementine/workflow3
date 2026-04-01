@@ -15,7 +15,7 @@ class PDFRenderService:
         self,
         pdf_path: str | Path,
         output_dir: str | Path,
-        dpi: int = 200,
+        dpi: int = 300,
         prefix: str = "page",
     ) -> list[Path]:
         pdf_path = Path(pdf_path)

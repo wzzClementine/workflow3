@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,12 +25,22 @@ class Settings(BaseSettings):
     sqlite_db_path: str = "./runtime_data/workflow3.db"
     data_root: str = "./runtime_data"
 
-    tencent_secret_id: str
-    tencent_secret_key: str
+    tencent_secret_id: str = ""
+    tencent_secret_key: str = ""
     tencent_region: str = "ap-beijing"
 
     llm_provider: str = "volcengine"
     llm_mock_mode: bool = True
+
+    # 讯飞 OCR 配置
+    iflytek_app_id: str = ""
+    iflytek_api_key: str = ""
+    iflytek_api_secret: str = ""
+
+    qwen_api_key: str = os.getenv("QWEN_API_KEY", "")
+    qwen_base_url: str = os.getenv("QWEN_BASE_URL", "")
+    qwen_text_model: str = os.getenv("QWEN_TEXT_MODEL", "qwen-plus")
+    qwen_vision_model: str = os.getenv("QWEN_VISION_MODEL", "qwen-vl-plus")
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -54,30 +65,12 @@ class Settings(BaseSettings):
         return self.data_root_path / "temp"
 
     @property
-    def papers_dir(self) -> Path:
-        return self.data_root_path / "papers"
+    def uploads_dir(self) -> Path:
+        return self.data_root_path / "uploads"
 
-    def validate_required_for_current_stage(self) -> None:
-        missing = []
-
-        if not self.app_name:
-            missing.append("APP_NAME")
-        if not self.data_root:
-            missing.append("DATA_ROOT")
-        if not self.sqlite_db_path:
-            missing.append("SQLITE_DB_PATH")
-
-        # Step 4 需要
-        if not self.feishu_app_id:
-            missing.append("FEISHU_APP_ID")
-        if not self.feishu_app_secret:
-            missing.append("FEISHU_APP_SECRET")
-        if not self.ngrok_public_url:
-            missing.append("NGROK_PUBLIC_URL")
-
-        if missing:
-            raise ValueError(f"缺少必要配置: {', '.join(missing)}")
+    @property
+    def tasks_dir(self) -> Path:
+        return self.data_root_path / "tasks"
 
 
 settings = Settings()
-settings.validate_required_for_current_stage()

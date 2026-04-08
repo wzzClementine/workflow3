@@ -1,456 +1,454 @@
-# Workflow3（完整工程说明文档）
+# 🧠 自动试卷处理 Agent 系统
 
-# uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-
-用于实现：试卷解析制作 + 小程序上架 的自动化工作流
+本项目是一个基于 Agent 架构的自动试卷处理系统，支持从飞书上传 PDF → 自动解析 → 结构化 → 生成 Excel → 打包 → 回传飞书。
 
 ---
 
-# 一、项目目标
-
-实现从 PDF 到小程序数据的完整流水线：
-
-PDF → 图片 → 切题 → OCR → Excel对齐 → JSON → 云端 → 小程序
-
----
-
-# 二、整体流程（Step1-10）
-
-## Step1-8（已完成）
-
-基础设施：
-
-- FastAPI 服务
-- SQLite 数据库
-- 文件系统
-- Task任务流
-- PDF渲染
-- 飞书机器人
-
----
-
-## Step9（人工）
-
-- 上传 blank PDF
-- OneNote 手写解析
-
----
-
-## Step10（自动化）
-
-### Step10.1
-PDF → 图片
-
-### Step10.2
-生成：
-
-- blank_pages
-- solution_pages
-
----
-
-### Step10.3
-绑定任务 + 数据库
-
----
-
-### Step10.4（已完成）
-
-题目切割系统
-
-输入：
-
-- blank_pages
-- solution_pages
-- Excel
-
-输出：
-
-- blank_questions
-- solution_questions
-
-功能：
-
-- OCR识别题号
-- 投影补漏
-- 裁剪边界
-- 解析图清洗（覆盖原图）
-- Excel对齐命名
-- 写入questions表
-
----
-
-### Step10.5（当前阶段）
-
-JSON转换（核心）
-
-目标：
-
-将 Excel + 图片 转换为小程序 JSON
-
----
-
-### Step10.6（待实现）
-
-云端同步：
-
-- 上传图片
-- 上传JSON
-- 返回URL
-
----
-
-### Step10.7（待实现）
-
-小程序读取 JSON
-
----
-
-# 三、项目目录结构（最新）
+# 🧩 一、系统整体架构
 
 ```text
-app/
- ├── db/
- │   ├── models.py
- │   └── sqlite_manager.py
-
- ├── routes/
- │   └── feishu_webhook.py
-
- ├── services/
- │   ├── feishu_service.py
- │   ├── llm_service.py
- │   ├── paper_service.py
- │   ├── pdf_render_service.py
- │   ├── question_service.py
- │   ├── storage_service.py
- │   ├── task_service.py
- │   └── webhook_event_service.py
-
- ├── skills/
- │   ├── file_store.py
- │   ├── generate_questions.py
- │   ├── import_pdf_to_workspace.py
- │   ├── render_pdf_pages.py
- │   ├── send_feishu_message.py
- │   ├── task_create.py
- │   ├── task_excel_upload.py
- │   └── task_update_status.py
-
- ├── utils/
- │   ├── clean_analysis_by_ocr.py
- │   ├── cut_questions_by_ocr.py
- │   ├── cut_solutions.py
- │   ├── download_file_from_feishu.py
- │   ├── file_utils.py
- │   ├── logger.py
- │   └── config.py
-
- └── main.py
-
-runtime_data/
- ├── logs/
- ├── papers/
- │   └── task_xxx/
- │       ├── raw/
- │       ├── blank_pages/
- │       ├── solution_pages/
- │       ├── blank_questions/
- │       ├── solution_questions/
- │       ├── json/
- │       └── logs/
- └── temp/
-
-workflow3.db
-
-
+用户（飞书）
+    ↓
+Webhook
+    ↓
+AgentOrchestrator（核心调度）
+    ↓
+Tool（标准执行单元）
+    ↓
+Service / Builder（业务逻辑）
+    ↓
+Infrastructure（外部系统：OCR / LLM / 飞书）
+    ↓
+本地文件系统 + SQLite
 ```
-# 四、核心模块说明
 
-## 1. routes 层
 
-### feishu_webhook.py
+# 二、完整处理流程
+```text
+1. 用户上传 PDF（飞书）
+2. webhook 接收 → 转 AgentEvent
+3. ingest_materials
+   → 下载 PDF 到本地
+4. waiting_confirmation
+5. 用户确认
+6. process_paper
+   → PDF → 图片 → 切题 → 切解析 → 清洗
+7. build_manifest（LLM）
+8. write_excel
+9. package_results
+10. deliver_results（上传飞书）
+```
 
-**入口：**
+## 📦 三、模块详细说明
 
-```python
-POST /feishu/event
+---
+
+### 1️⃣ Agent 层（核心控制）
+
+#### 📄 `app/agent/orchestrator/agent_orchestrator.py`
 
 **功能：**
 
-- 接收飞书消息
-- 解析 message_type（text/file）
-- 调用 skill
-- 触发任务流
+* 系统核心调度器（大脑）
+* 控制完整处理流程（Pipeline）
+* 管理状态机（任务阶段）
+* 调度 Tool 执行
+* 推送飞书进度消息
 
-
----
-
-## 2. services 层
-
-### task_service.py
-
-职责：任务管理
+**输入：**
 
 ```python
-create_task(created_by)
-# 输入：用户ID
-# 输出：task对象
+AgentEvent
 ```
+
+**输出：**
 
 ```python
-update_status(task_id, status)
+AgentResult
 ```
+
+**核心职责：**
+
+* 判断当前任务阶段（collecting / confirmation / processing）
+* 串联完整流程：
+
+  ```
+  process_paper → build_manifest → write_excel → package → deliver
+  ```
+* 控制执行顺序
+* 统一用户反馈（飞书）
+
+---
+
+#### 📄 `app/agent/schema/agent_event.py`
+
+**功能：**
+定义系统输入事件结构
+
+**数据结构：**
 
 ```python
-get_latest_task()
-# 输出：最新任务
-```
+AgentEvent:
+    chat_id
+    event_type
+    user_message
+    files
 
+UploadedFile:
+    file_name
+    file_key
+    message_id
+```
 
 ---
 
-### paper_service.py
+#### 📄 `app/agent/schema/agent_result.py`
 
-职责：试卷管理
+**功能：**
+定义系统输出结构
 
 ```python
-get_paper_by_task_id(task_id)
-# 输出：paper
+AgentResult:
+    status
+    message
+    task_id
+    snapshot
 ```
+
+---
+
+### 2️⃣ Tool 层（执行单元）
+
+> 所有 orchestrator 调用的模块必须是 Tool
+
+---
+
+#### 📄 `IngestMaterialsTool`
+
+路径：`app/skills/ingestion/ingest_materials_tool.py`
+
+**功能：**
+
+* 解析飞书上传文件
+* 下载 PDF 到本地
+* 写入任务文件记录
+
+**输入：**
 
 ```python
-update_json_path(paper_id, json_path)
+task_id
+files[]
 ```
 
-
----
-
-### question_service.py
-
-职责：题目管理
+**输出：**
 
 ```python
-upsert_question(...)
+materials_summary
 ```
+
+---
+
+#### 📄 `ProcessPaperTool`
+
+路径：`app/skills/processing/process_paper_tool.py`
+
+**功能：**
+执行核心图像处理流程：
+
+```
+PDF → 图片 → 切题 → 切解析 → 清洗
+```
+
+**输出：**
 
 ```python
-get_questions_by_paper_id(paper_id)
-# 输出：题目列表
+{
+    task_root,
+    question_output_root,
+    analysis_output_root,
+    cleaned_output_root
+}
 ```
 
-
 ---
 
-### pdf_render_service.py
+#### 📄 `BuildManifestTool`
 
-职责：
+路径：`app/skills/manifest/build_manifest_tool.py`
 
-- PDF → 图片
+**功能：**
 
+* 调用视觉 LLM
+* 解析题目内容
+* 构建结构化数据
 
----
-
-### storage_service.py
-
-职责：
-
-- 路径生成 + 文件存储
-
-
----
-
-### webhook_event_service.py（关键）
-
-职责：飞书事件去重
+**输入：**
 
 ```python
-begin_event_once(event_key)
+question_root_dir
+analysis_root_dir
 ```
+
+**输出：**
+
+```json
+manifest.json
+```
+
+---
+
+#### 📄 `WriteExcelTool`
+
+路径：`app/skills/excel/write_excel_tool.py`
+
+**功能：**
+
+* 将 manifest 转换为 Excel
+* 按模板生成试卷结构表
+
+**输入：**
 
 ```python
-update_event_status(event_key, status)
+manifest_path
 ```
 
+**输出：**
+
+```python
+excel_path
+```
 
 ---
 
-### feishu_service.py
+#### 📄 `PackagingTool`
 
-职责：
+路径：`app/skills/packaging/packaging_tool.py`
 
-- 飞书 API 调用
-- token 获取
+**功能：**
+构建最终交付目录：
 
+```
+delivery/
+    excel/
+    question_images/
+    analysis_images/
+```
 
----
+**输出：**
 
-## 3. skills 层（核心执行层）
-
-### task_create.py
-
-创建任务
-
-
----
-
-### task_update_status.py
-
-更新任务状态
-
+```python
+local_package_path
+```
 
 ---
 
-### file_store.py
+#### 📄 `DeliverResultsTool`
 
-创建任务目录：
+路径：`app/skills/delivery/deliver_results_tool.py`
 
-- raw
-- pages
-- questions
-- json
+**功能：**
 
+* 上传交付文件到飞书云
+* 记录 delivery 信息
 
----
+**输出：**
 
-### import_pdf_to_workspace.py
-
-导入 PDF 到 raw/
-
+```python
+remote_url
+```
 
 ---
 
-### render_pdf_pages.py
-
-PDF → page 图片
-
+### 3️⃣ Service / Builder 层（业务逻辑）
 
 ---
 
-### generate_questions.py（Step10.4核心）
+#### 📄 `LLMManifestBuilder`
 
-输入：
+路径：`app/skills/manifest/manifest_builder.py`
 
-- task_id
-- Excel路径
+**功能：**
 
-输出：
+* 调用视觉 LLM
+* 解析题目结构
+* 生成标准化数据
 
-- blank_questions
-- solution_questions
+**输出结构：**
 
-流程：
-
-1. OCR识别
-2. 切题
-3. 清洗解析
-4. 命名
-5. 写DB
-
-
----
-
-### task_excel_upload.py
-
-职责：
-
-- 保存 Excel 到 raw/
-- 触发 Step10.4
-
+```json
+{
+  "question_type": "...",
+  "answer": "...",
+  "score": ...,
+  "knowledge_points": [...]
+}
+```
 
 ---
 
-### send_feishu_message.py
+#### 📄 `ExcelWriter`
 
-发送消息
+路径：`app/skills/excel/excel_writer.py`
 
+**功能：**
 
----
-
-## 4. utils 层（算法核心）
-
-### cut_questions_by_ocr.py
-
-功能：
-
-- OCR识别题号
-- 定位题目区域
-
+* 读取 manifest.json
+* 写入 Excel 模板
+* 生成结构化表格
 
 ---
 
-### cut_solutions.py
+#### 📄 `PackagingService`
 
-功能：
+路径：`app/skills/packaging/packaging_service.py`
 
-- 切解析图
+**功能：**
 
-
----
-
-### clean_analysis_by_ocr.py
-
-功能：
-
-- 删除题干文字
-- 保留解析内容
-
+* 整理输出文件
+* 构建交付目录结构
+* 复制资源文件
 
 ---
 
-### download_file_from_feishu.py
-
-功能：
-
-- 根据 file_key 下载文件
-
+### 4️⃣ Infrastructure 层（外部系统）
 
 ---
 
-### config.py
+#### 📄 `feishu_message_file_client.py`
 
-功能：
+**功能：**
 
-- 读取 .env
-- 提供配置（secret_id 等）
-
-
----
-
-# 五、数据库设计
-
-## tasks
-
-- task_id
-- status
-- input_path
-- output_path
-
+```text
+file_key → 下载本地文件
+```
 
 ---
 
-## papers
+#### 📄 `feishu_drive_client.py`
 
-- paper_id
-- paper_name
-- json_path
-- publish_status
+**功能：**
 
-
----
-
-## questions
-
-- question_no
-- blank_image_path
-- solution_image_path
-- match_status
-
+```text
+本地文件 → 上传飞书云盘
+```
 
 ---
 
-## webhook_events
+#### 📄 `feishu_message_sender.py`
 
-- event_key
-- status
-- task_id
+**功能：**
+发送飞书消息（进度推送）
+
+示例：
+
+```
+📥 接收文件
+🛠️ 处理中
+🧠 分析中
+📊 生成Excel
+📦 打包
+☁️ 上传
+🎉 完成
+```
+
+---
+
+#### 📄 `tencent_ocr_client.py`
+
+**功能：**
+图像 OCR 识别
+
+---
+
+#### 📄 `vision_llm_client.py`
+
+**功能：**
+多模态推理（图像 → 结构化数据）
+
+---
+
+### 5️⃣ 数据层
+
+---
+
+#### 📄 `sqlite_manager.py`
+
+**功能：**
+管理 SQLite 数据库
+
+**主要表：**
+
+* tasks
+* task_files
+* delivery_records
+* memory
+
+---
+
+### 6️⃣ 工具层
+
+---
+
+#### 📄 `retry.py`
+
+路径：`app/shared/utils/retry.py`
+
+**功能：**
+统一重试机制：
+
+* LLM 请求失败
+* OCR 失败
+* 网络异常
+
+---
+
+### 7️⃣ API 层
+
+---
+
+#### 📄 `app/main.py`
+
+**功能：**
+
+* 初始化所有组件
+* 注册 Tool
+* 启动 FastAPI
+* 注入 orchestrator
+
+---
+
+#### 📄 `feishu_webhook.py`
+
+**功能：**
+
+```text
+飞书事件 → AgentEvent → orchestrator
+```
+
+---
+
+## 📌 模块关系总结
+
+```text
+AgentOrchestrator
+    ↓
+Tool（统一执行入口）
+    ↓
+Service / Builder（业务逻辑）
+    ↓
+Infrastructure（外部系统）
+    ↓
+文件系统 / 数据库
+```
+
+---
+
+## 🎯 核心设计原则
+
+```
+1. orchestrator 只负责流程控制
+2. Tool 是唯一执行入口
+3. Service 负责逻辑
+4. Infrastructure 负责外部交互
+```
+

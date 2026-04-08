@@ -1,30 +1,26 @@
-from typing import Any, Callable
+from __future__ import annotations
+
+from app.agent.tools.base_tool import BaseTool
 
 
 class ToolRegistry:
-    def __init__(self) -> None:
-        self._tools: dict[str, dict[str, Any]] = {}
+    def __init__(self):
+        self._tools: dict[str, BaseTool] = {}
 
-    def register_tool(
-        self,
-        name: str,
-        description: str,
-        handler: Callable[..., Any],
-    ) -> None:
-        if name in self._tools:
-            raise ValueError(f"工具已注册: {name}")
+    def register(self, tool: BaseTool) -> None:
+        if not tool.name:
+            raise ValueError("工具必须定义 name")
 
-        self._tools[name] = {
-            "name": name,
-            "description": description,
-            "handler": handler,
-        }
+        self._tools[tool.name] = tool
 
-    def get_tool(self, name: str) -> dict[str, Any] | None:
-        return self._tools.get(name)
+    def get(self, tool_name: str) -> BaseTool:
+        tool = self._tools.get(tool_name)
+        if not tool:
+            raise ValueError(f"未注册的工具: {tool_name}")
+        return tool
 
-    def has_tool(self, name: str) -> bool:
-        return name in self._tools
+    def has(self, tool_name: str) -> bool:
+        return tool_name in self._tools
 
-    def list_tools(self) -> list[dict[str, Any]]:
-        return list(self._tools.values())
+    def list_tool_names(self) -> list[str]:
+        return list(self._tools.keys())

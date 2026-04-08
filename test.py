@@ -1,4 +1,10 @@
-from app.services.task_stage_service import task_stage_service
+from app.infrastructure.ocr.xfyun_llm_ocr import OCRForLLMClient
 
-result = task_stage_service.get_task_stage("task_20260401_172008_5414")
-print(result)
+client = OCRForLLMClient()
+
+result = client.general_ocr("page_4.png")
+
+texts = client.get_text_detections(result)
+
+for item in texts:
+    print(item["DetectedText"])

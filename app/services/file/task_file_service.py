@@ -70,3 +70,57 @@ class TaskFileService:
             "blank_files": blank_files,
             "solution_files": solution_files,
         }
+
+    def get_latest_materials_summary(
+        self,
+        task_id: str,
+    ) -> dict[str, Any]:
+        latest_blank = self.task_file_repository.get_latest_by_task_id_and_role(task_id, "blank_pdf")
+        latest_solution = self.task_file_repository.get_latest_by_task_id_and_role(task_id, "solution_pdf")
+
+        return {
+            "has_blank_pdf": latest_blank is not None,
+            "has_solution_pdf": latest_solution is not None,
+            "is_ready": latest_blank is not None and latest_solution is not None,
+            "blank_pdf_name": latest_blank.get("file_name") if latest_blank else None,
+            "solution_pdf_name": latest_solution.get("file_name") if latest_solution else None,
+            "blank_pdf_pages": latest_blank.get("page_count") if latest_blank else None,
+            "solution_pdf_pages": latest_solution.get("page_count") if latest_solution else None,
+            "blank_pdf_record": latest_blank,
+            "solution_pdf_record": latest_solution,
+        }
+
+    def build_user_friendly_materials_text(
+        self,
+        task_id: str,
+    ) -> str:
+        summary = self.get_latest_materials_summary(task_id)
+
+        has_blank = summary["has_blank_pdf"]
+        has_solution = summary["has_solution_pdf"]
+
+        blank_name = summary["blank_pdf_name"]
+        solution_name = summary["solution_pdf_name"]
+        blank_pages = summary["blank_pdf_pages"]
+        solution_pages = summary["solution_pdf_pages"]
+
+        def _fmt(name: str | None, pages: int | None) -> str:
+            if not name:
+                return "未知文件"
+            if isinstance(pages, int) and pages > 0:
+                return f"{name}（{pages}页）"
+            return name
+
+        if has_blank and has_solution:
+            return (
+                f"已收到试卷材料：{_fmt(blank_name, blank_pages)}；"
+                f"已收到解析材料：{_fmt(solution_name, solution_pages)}。"
+            )
+
+        if has_blank and not has_solution:
+            return f"已收到试卷材料：{_fmt(blank_name, blank_pages)}，还缺答案解析 PDF。"
+
+        if not has_blank and has_solution:
+            return f"已收到解析材料：{_fmt(solution_name, solution_pages)}，还缺空白试卷 PDF。"
+
+        return "当前还没有识别到有效的空白试卷 PDF 和答案解析 PDF，请继续上传。"

@@ -33,6 +33,46 @@ class AgentOrchestrator:
         self.confirmation_policy = confirmation_policy
         self.feishu_message_sender = feishu_message_sender
 
+    def _run_planner_flow(
+        self,
+        event: AgentEvent,
+        snapshot: dict,
+        task_id: str | None,
+    ) -> AgentResult:
+        decision = self.llm_planner.plan(
+            event=event,
+            snapshot=snapshot,
+        )
+
+        tool_result = None
+
+        if decision.should_call_tool and decision.tool_name:
+            tool_call = ToolCall(
+                tool_name=decision.tool_name,
+                tool_args=decision.tool_args,
+            )
+            tool_result = self.tool_executor.execute(tool_call)
+            snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
+
+            if not tool_result.success:
+                return AgentResult(
+                    status="failed",
+                    message=tool_result.message,
+                    task_id=task_id,
+                    snapshot=snapshot,
+                )
+
+        message = decision.reply
+        if tool_result and tool_result.message:
+            message = f"{decision.reply}\n\n{tool_result.message}"
+
+        return AgentResult(
+            status="ok",
+            message=message,
+            task_id=task_id,
+            snapshot=snapshot,
+        )
+
     def handle_event(
         self,
         event: AgentEvent,
@@ -60,6 +100,26 @@ class AgentOrchestrator:
             )
 
         current_task_id = session.get("current_task_id")
+
+        # ===== 新增：如果 session 绑定的是旧任务终态，则先解绑 =====
+        if current_task_id:
+            bound_task = self.task_service.get_task(current_task_id)
+
+            if bound_task and bound_task.get("status") in ["completed", "failed"]:
+                # 旧任务保留为历史任务，但不再作为当前活跃任务使用
+                self.chat_session_service.bind_task(
+                    chat_id=event.chat_id,
+                    task_id=None,  # 运行时允许 None，用于解绑当前 task
+                )
+                self.chat_session_service.update_summary_memory(
+                    chat_id=event.chat_id,
+                    summary_memory=f"已将终态任务 {current_task_id} 归档为历史任务，准备进入新任务会话",
+                )
+
+                current_task_id = None
+                session = self.chat_session_service.get_session(event.chat_id) or session
+        # ===== 新增结束 =====
+
         if not current_task_id:
             task = self.task_service.create_task(
                 chat_id=event.chat_id,
@@ -368,15 +428,24 @@ class AgentOrchestrator:
                     snapshot=snapshot,
                 )
 
-            return AgentResult(
-                status="ok",
-                message="当前材料已就绪，请直接回复“确认”或“没问题”开始处理；如果材料有误，请直接说明。",
-                task_id=current_task_id,
+            # 非确认/驳回文本：进入 planner
+            snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
+            return self._run_planner_flow(
+                event=event,
                 snapshot=snapshot,
+                task_id=current_task_id,
             )
 
-        # 3. collecting_materials 规则优先
+        # 3. collecting_materials 阶段：文本进入 planner；其他事件兜底
         if current_stage == TaskState.COLLECTING_MATERIALS.value:
+            if event.event_type == "text":
+                snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
+                return self._run_planner_flow(
+                    event=event,
+                    snapshot=snapshot,
+                    task_id=current_task_id,
+                )
+
             return AgentResult(
                 status="ok",
                 message="请上传 blank_pdf 和 solution_pdf，我会继续处理。支持一次上传一个，也支持一次上传多个文件。",
@@ -384,8 +453,16 @@ class AgentOrchestrator:
                 snapshot=snapshot,
             )
 
-        # 4. processing 阶段说明
+        # 4. processing 阶段：文本进入 planner；非文本事件保留原状态说明
         if current_stage == TaskState.PROCESSING.value:
+            if event.event_type == "text":
+                snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
+                return self._run_planner_flow(
+                    event=event,
+                    snapshot=snapshot,
+                    task_id=current_task_id,
+                )
+
             task_memory = snapshot.get("task_memory") or {}
             processing_summary = task_memory.get("processing_summary") or "当前任务正在处理中。"
             next_action_hint = task_memory.get("next_action_hint") or ""
@@ -402,36 +479,9 @@ class AgentOrchestrator:
             )
 
         # 5. 其他阶段交给 planner
-        decision = self.llm_planner.plan(
+        snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
+        return self._run_planner_flow(
             event=event,
             snapshot=snapshot,
-        )
-
-        tool_result = None
-
-        if decision.should_call_tool and decision.tool_name:
-            tool_call = ToolCall(
-                tool_name=decision.tool_name,
-                tool_args=decision.tool_args,
-            )
-            tool_result = self.tool_executor.execute(tool_call)
-            snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
-
-            if not tool_result.success:
-                return AgentResult(
-                    status="failed",
-                    message=tool_result.message,
-                    task_id=current_task_id,
-                    snapshot=snapshot,
-                )
-
-        message = decision.reply
-        if tool_result and tool_result.message:
-            message = f"{decision.reply}\n\n{tool_result.message}"
-
-        return AgentResult(
-            status="ok",
-            message=message,
             task_id=current_task_id,
-            snapshot=snapshot,
         )

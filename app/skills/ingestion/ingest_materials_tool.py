@@ -57,8 +57,9 @@ class IngestMaterialsTool(BaseTool):
                 continue
 
             local_path = None
+            page_count = None
 
-            # 关键：有 message_id + file_key 就下载到本地
+            # 有 message_id + file_key 就下载到本地
             if file_key and message_id:
                 local_path = self.file_fetch_service.download_uploaded_file_to_task_dir(
                     task_id=task_id,
@@ -66,6 +67,7 @@ class IngestMaterialsTool(BaseTool):
                     file_key=file_key,
                     message_id=message_id,
                 )
+                page_count = self._get_pdf_page_count(local_path)
 
             record = self.task_file_service.create_file_record(
                 task_id=task_id,
@@ -74,6 +76,7 @@ class IngestMaterialsTool(BaseTool):
                 storage_type="feishu",
                 local_path=local_path,
                 remote_key=file_key,
+                page_count=page_count,
                 metadata=item,
             )
 
@@ -81,14 +84,18 @@ class IngestMaterialsTool(BaseTool):
                 created_records.append(record)
 
         materials_summary = self.task_file_service.get_materials_summary(task_id)
+        latest_materials_summary = self.task_file_service.get_latest_materials_summary(task_id)
+        materials_text = self.task_file_service.build_user_friendly_materials_text(task_id)
+
+        if latest_materials_summary["is_ready"]:
+            processing_summary = f"{materials_text} 当前材料已齐全，等待你确认是否开始处理。"
+        else:
+            processing_summary = f"{materials_text} 当前材料还未收齐，请继续上传缺失文件。"
 
         self.task_memory_service.update_processing_summary(
             task_id=task_id,
             current_stage="collecting_materials",
-            processing_summary=(
-                f"当前材料统计: blank_pdf={materials_summary['blank_pdf_count']}, "
-                f"solution_pdf={materials_summary['solution_pdf_count']}"
-            ),
+            processing_summary=processing_summary,
         )
 
         self.task_memory_service.update_next_action_hint(
@@ -111,10 +118,11 @@ class IngestMaterialsTool(BaseTool):
             return ToolResult(
                 tool_name=self.name,
                 success=True,
-                message="材料已齐全，文件已下载到本地，任务已进入 waiting_confirmation",
+                message="材料已齐全，文件已准备好，请确认是否开始处理。回复“开始”即可继续。",
                 data={
                     "created_records": created_records,
                     "materials_summary": materials_summary,
+                    "latest_materials_summary": latest_materials_summary,
                 },
             )
 
@@ -125,6 +133,7 @@ class IngestMaterialsTool(BaseTool):
             data={
                 "created_records": created_records,
                 "materials_summary": materials_summary,
+                "latest_materials_summary": latest_materials_summary,
             },
         )
 
@@ -141,3 +150,22 @@ class IngestMaterialsTool(BaseTool):
             return "blank_pdf"
 
         return "unknown"
+
+    def _get_pdf_page_count(self, local_path: str | None) -> int | None:
+        if not local_path:
+            return None
+
+        # 优先尝试 pypdf，再尝试 PyPDF2；都没有就返回 None
+        try:
+            from pypdf import PdfReader  # type: ignore
+            reader = PdfReader(local_path)
+            return len(reader.pages)
+        except Exception:
+            pass
+
+        try:
+            from PyPDF2 import PdfReader  # type: ignore
+            reader = PdfReader(local_path)
+            return len(reader.pages)
+        except Exception:
+            return None

@@ -40,7 +40,13 @@ def _insert_event(sqlite_manager, event_id: str, event_type: str, detail_json: s
     )
 
 
-def _update_event_status(sqlite_manager, event_id: str, status: str, task_id: str | None = None, detail_json: str | None = None) -> None:
+def _update_event_status(
+    sqlite_manager,
+    event_id: str,
+    status: str,
+    task_id: str | None = None,
+    detail_json: str | None = None,
+) -> None:
     sqlite_manager.execute(
         """
         UPDATE webhook_events
@@ -51,9 +57,23 @@ def _update_event_status(sqlite_manager, event_id: str, status: str, task_id: st
     )
 
 
-def _run_event(orchestrator, sqlite_manager, event_id: str, event):
+def _run_event(
+    orchestrator,
+    sqlite_manager,
+    feishu_message_sender,
+    event_id: str,
+    event,
+):
     try:
         result = orchestrator.handle_event(event)
+
+        # 将普通文本类 AgentResult 发回飞书
+        if getattr(result, "message", None):
+            feishu_message_sender.send_text(
+                event.chat_id,
+                result.message,
+            )
+
         _update_event_status(
             sqlite_manager,
             event_id=event_id,
@@ -125,12 +145,14 @@ async def feishu_webhook(request: Request, background_tasks: BackgroundTasks):
     print("Parsed AgentEvent:", event)
 
     orchestrator = request.app.state.orchestrator
+    feishu_message_sender = request.app.state.feishu_message_sender
 
     # 后台执行，先快速返回 200，防止飞书重试
     background_tasks.add_task(
         _run_event,
         orchestrator,
         sqlite_manager,
+        feishu_message_sender,
         event_id,
         event,
     )

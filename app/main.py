@@ -106,6 +106,7 @@ def build_app_components() -> dict:
         task_service=task_service,
         chat_session_service=session_service,
         task_memory_service=memory_service,
+        task_file_service=file_service,
     )
 
     planner_input_builder = PlannerInputBuilder()
@@ -203,6 +204,7 @@ def build_app_components() -> dict:
         "tool_executor": tool_executor,
         "orchestrator": orchestrator,
         "vision_llm_client": vision_llm_client,
+        "feishu_message_sender": feishu_message_sender,
     }
 
 

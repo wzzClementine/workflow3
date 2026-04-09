@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.agent.tools import BaseTool, ToolCall, ToolResult
 from app.services.task import TaskService
 from app.services.memory import TaskMemoryService
@@ -29,7 +31,7 @@ class PackagingTool(BaseTool):
         cleaned_analysis_dir = tool_call.tool_args.get("cleaned_analysis_dir")
         manifest_path = tool_call.tool_args.get("manifest_path")
 
-        # 新增：空白试卷 PDF 路径
+        # 空白试卷 PDF 路径
         source_pdf_path = tool_call.tool_args.get("source_pdf_path")
 
         try:
@@ -44,17 +46,28 @@ class PackagingTool(BaseTool):
                 source_pdf_path=source_pdf_path,
             )
 
+            package_name = Path(delivery_path).name
+
             self.task_memory_service.update_processing_summary(
                 task_id=task_id,
                 current_stage="processing",
-                processing_summary="交付目录已打包",
+                processing_summary=f"交付目录已打包：{package_name}",
             )
 
             return ToolResult(
                 tool_name=self.name,
                 success=True,
                 message="打包完成",
-                data={"local_package_path": delivery_path},
+                data={
+                    "local_package_path": delivery_path,
+                    "package_name": package_name,
+                    "package_contents": [
+                        "tags.xlsx",
+                        "questionPicture",
+                        "analysisPicture",
+                        "原始试卷 PDF",
+                    ],
+                },
             )
 
         except Exception as e:

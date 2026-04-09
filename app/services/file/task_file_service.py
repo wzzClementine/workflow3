@@ -124,3 +124,58 @@ class TaskFileService:
             return f"已收到解析材料：{_fmt(solution_name, solution_pages)}，还缺空白试卷 PDF。"
 
         return "当前还没有识别到有效的空白试卷 PDF 和答案解析 PDF，请继续上传。"
+
+    def get_latest_material_records(
+        self,
+        task_id: str,
+    ) -> dict[str, dict[str, Any] | None]:
+        return {
+            "blank_pdf": self.task_file_repository.get_latest_by_task_id_and_role(task_id, "blank_pdf"),
+            "solution_pdf": self.task_file_repository.get_latest_by_task_id_and_role(task_id, "solution_pdf"),
+        }
+
+    def clone_latest_materials_to_task(
+        self,
+        source_task_id: str,
+        target_task_id: str,
+    ) -> dict[str, Any]:
+        latest = self.get_latest_material_records(source_task_id)
+        blank_record = latest.get("blank_pdf")
+        solution_record = latest.get("solution_pdf")
+
+        created_records: list[dict[str, Any]] = []
+
+        for record in [blank_record, solution_record]:
+            if not record:
+                continue
+
+            metadata = None
+            raw_metadata = record.get("metadata_json")
+            if raw_metadata:
+                try:
+                    metadata = json.loads(raw_metadata)
+                except Exception:
+                    metadata = {"raw_metadata_json": raw_metadata}
+
+            created = self.create_file_record(
+                task_id=target_task_id,
+                file_role=record.get("file_role"),
+                file_name=record.get("file_name"),
+                storage_type=record.get("storage_type") or "feishu",
+                local_path=record.get("local_path"),
+                remote_key=record.get("remote_key"),
+                remote_url=record.get("remote_url"),
+                page_count=record.get("page_count"),
+                metadata=metadata,
+            )
+            if created:
+                created_records.append(created)
+
+        materials_summary = self.get_materials_summary(target_task_id)
+        latest_materials_summary = self.get_latest_materials_summary(target_task_id)
+
+        return {
+            "created_records": created_records,
+            "materials_summary": materials_summary,
+            "latest_materials_summary": latest_materials_summary,
+        }

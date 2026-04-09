@@ -36,6 +36,12 @@ class DeliveryService:
         delivery_id = f"delivery_{uuid.uuid4().hex[:12]}"
         delivered_at = datetime.now().isoformat(timespec="seconds")
 
+        remote_url = (
+            upload_result.get("uploaded_file_url")
+            or upload_result.get("root_folder_url")
+            or ""
+        )
+
         record = self.delivery_record_repository.create_record(
             delivery_id=delivery_id,
             task_id=task_id,
@@ -43,7 +49,7 @@ class DeliveryService:
             delivery_folder_name=Path(local_package_path).name,
             local_package_path=local_package_path,
             feishu_folder_token=upload_result.get("root_folder_token"),
-            remote_url=upload_result.get("root_folder_url"),
+            remote_url=remote_url,
             delivered_at=delivered_at,
         )
 

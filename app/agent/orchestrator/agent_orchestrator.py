@@ -101,15 +101,14 @@ class AgentOrchestrator:
 
         current_task_id = session.get("current_task_id")
 
-        # ===== 新增：如果 session 绑定的是旧任务终态，则先解绑 =====
+        # 如果 session 绑定的是终态任务，则先解绑
         if current_task_id:
             bound_task = self.task_service.get_task(current_task_id)
 
             if bound_task and bound_task.get("status") in ["completed", "failed"]:
-                # 旧任务保留为历史任务，但不再作为当前活跃任务使用
                 self.chat_session_service.bind_task(
                     chat_id=event.chat_id,
-                    task_id=None,  # 运行时允许 None，用于解绑当前 task
+                    task_id=None,
                 )
                 self.chat_session_service.update_summary_memory(
                     chat_id=event.chat_id,
@@ -118,7 +117,6 @@ class AgentOrchestrator:
 
                 current_task_id = None
                 session = self.chat_session_service.get_session(event.chat_id) or session
-        # ===== 新增结束 =====
 
         if not current_task_id:
             task = self.task_service.create_task(
@@ -176,10 +174,15 @@ class AgentOrchestrator:
             if self.confirmation_policy.is_confirm_message(event.user_message):
                 self.feishu_message_sender.send_text(
                     event.chat_id,
-                    "✅ 已收到确认，开始处理试卷。",
+                    "✅ 已确认材料，开始处理试卷。\n\n"
+                    "我会依次完成：\n"
+                    "- 试卷结构解析与切题\n"
+                    "- 答案与知识点提取\n"
+                    "- 结果整理并上传\n\n"
+                    "请稍候，处理中..."
                 )
 
-                # 2.1 先推进到 processing
+                # 先推进到 processing
                 stage_tool_call = ToolCall(
                     tool_name="manage_task",
                     tool_args={
@@ -209,7 +212,7 @@ class AgentOrchestrator:
                 # ========= Step A: process_paper =========
                 self.feishu_message_sender.send_text(
                     event.chat_id,
-                    "🛠️ 正在执行 PDF 转图片、切题、切解析和清洗流程，请稍候。",
+                    "🔄 当前正在解析试卷结构并切题......",
                 )
 
                 work_dir = str(settings.tasks_dir)
@@ -241,7 +244,7 @@ class AgentOrchestrator:
                 # ========= Step B: build_manifest =========
                 self.feishu_message_sender.send_text(
                     event.chat_id,
-                    "🧠 正在分析答案与知识点。",
+                    "🔄 试卷结构解析已完成！当前正在提取答案与知识点，用于填写 Excel 表格 (耗时1-2分钟，请耐心等待) ......",
                 )
 
                 manifest_path = str(Path(task_root) / "manifest" / "manifest.json")
@@ -272,7 +275,7 @@ class AgentOrchestrator:
                 # ========= Step C: write_excel =========
                 self.feishu_message_sender.send_text(
                     event.chat_id,
-                    "📊 正在生成 Excel。",
+                    "🔄 答案与知识点解析已完成！当前正在填写 Excel 表格 (tags.xlsx)......",
                 )
 
                 excel_path = str(Path(task_root) / "excel" / f"{current_task_id}.xlsx")
@@ -304,7 +307,7 @@ class AgentOrchestrator:
                 # ========= Step D: package_results =========
                 self.feishu_message_sender.send_text(
                     event.chat_id,
-                    "📦 正在整理交付文件夹。",
+                    "🔄 Excel 表格已填写完成！当前正在打包所有资料......",
                 )
 
                 package_tool_call = ToolCall(
@@ -332,6 +335,8 @@ class AgentOrchestrator:
                     )
 
                 local_package_path = package_result.data.get("local_package_path")
+                package_name = package_result.data.get("package_name") or ""
+                package_contents = package_result.data.get("package_contents") or []
                 if not local_package_path:
                     snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
                     return AgentResult(
@@ -344,7 +349,7 @@ class AgentOrchestrator:
                 # ========= Step E: deliver_results =========
                 self.feishu_message_sender.send_text(
                     event.chat_id,
-                    "☁️ 正在上传到飞书云文件夹。",
+                    "🔄 所有材料均已打包完成！当前正在上传到飞书云盘文件夹......",
                 )
 
                 deliver_tool_call = ToolCall(
@@ -356,6 +361,7 @@ class AgentOrchestrator:
                 )
 
                 deliver_result = self.tool_executor.execute(deliver_tool_call)
+                print("DELIVER_RESULT_DATA =", deliver_result.data)
                 snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
 
                 if not deliver_result.success:
@@ -377,23 +383,53 @@ class AgentOrchestrator:
                     summary_memory=f"任务 {current_task_id} 已完成完整处理链并上传飞书",
                 )
 
+
+                finish_text_parts = ["🎉 处理完成！", ""]
+
+                if package_name:
+                    finish_text_parts.extend([
+                        "📁 交付文件夹：",
+                        package_name,
+                        "",
+                    ])
+
+                if package_contents:
+                    finish_text_parts.extend([
+                        "📦 包含内容：",
+                        *[f"- {item}" for item in package_contents],
+                        "",
+                    ])
+
+                if remote_url:
+                    finish_text_parts.extend([
+                        "🔗 查看结果：",
+                        remote_url,
+                        "",
+                    ])
+                else:
+                    finish_text_parts.extend([
+                        "结果已上传到飞书云盘。若你这边暂时没看到链接，我可以继续帮你检查上传返回信息。",
+                        "",
+                    ])
+
+                finish_text_parts.append("如需重新处理、修改或补充材料，可以直接告诉我。")
+
                 self.feishu_message_sender.send_text(
                     event.chat_id,
-                    f"🎉 处理完成，请查看交付结果。\n{remote_url}" if remote_url else "🎉 处理完成，请查看交付结果。",
+                    "\n".join(finish_text_parts),
                 )
+
+                result_message = "处理完成，结果已上传。"
+
+                if package_name:
+                    result_message += f"\n交付文件夹：{package_name}"
+
+                if remote_url:
+                    result_message += f"\n查看链接：{remote_url}"
 
                 return AgentResult(
                     status="ok",
-                    message=(
-                        "完整流程已执行完成：\n"
-                        "- PDF 转图片\n"
-                        "- 切题 / 切解析 / 清洗\n"
-                        "- manifest 生成\n"
-                        "- Excel 生成\n"
-                        "- 交付目录打包\n"
-                        "- 飞书云上传\n"
-                        f"{'交付链接：' + remote_url if remote_url else ''}"
-                    ),
+                    message=result_message,
                     task_id=current_task_id,
                     snapshot=snapshot,
                 )

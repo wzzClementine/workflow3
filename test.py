@@ -1,10 +1,21 @@
-from app.infrastructure.ocr.xfyun_llm_ocr import OCRForLLMClient
+from app.services.delivery import DeliveryService
+from app.infrastructure.feishu import FeishuDriveClient
+from app.repositories.delivery_repo import DeliveryRecordRepository
 
-client = OCRForLLMClient()
+# 初始化依赖
+drive_client = FeishuDriveClient()
+delivery_repo = DeliveryRecordRepository()
 
-result = client.general_ocr("page_4.png")
+delivery_service = DeliveryService(
+    drive_client=drive_client,
+    delivery_record_repository=delivery_repo,
+)
+# 你自己本地随便找一个已经打包好的目录
+local_package_path = "runtime_data/BS-LJBS-2024-3星-10.zip"  # 改成你真实路径
 
-texts = client.get_text_detections(result)
+result = delivery_service.deliver_package_to_feishu(
+    local_package_path=local_package_path
+)
 
-for item in texts:
-    print(item["DetectedText"])
+print("==== DELIVERY RESULT ====")
+print(result)

@@ -36,6 +36,7 @@ from app.agent.tools import ToolRegistry, ToolExecutor
 from app.agent.orchestrator import AgentOrchestrator
 
 from app.skills.task import ManageTaskTool
+from app.skills.task.rerun_last_task_tool import RerunLastTaskTool
 from app.skills.ingestion import IngestMaterialsTool
 from app.skills.rendering import PDFRenderer
 from app.skills.segmentation import QuestionSegmenter, AnalysisSegmenter, AnalysisCleaner
@@ -45,6 +46,7 @@ from app.skills.ingestion.file_fetch_service import FileFetchService
 from app.skills.manifest import BuildManifestTool
 from app.skills.excel import WriteExcelTool
 from app.skills.packaging import PackagingTool
+
 
 from app.interfaces.api import agent_router
 from app.interfaces.feishu.feishu_webhook import router as feishu_router
@@ -128,6 +130,15 @@ def build_app_components() -> dict:
 
     tool_registry.register(
         ManageTaskTool(task_service=task_service)
+    )
+
+    tool_registry.register(
+        RerunLastTaskTool(
+            task_service=task_service,
+            task_file_service=file_service,
+            task_memory_service=memory_service,
+            chat_session_service=session_service,
+        )
     )
 
     tool_registry.register(

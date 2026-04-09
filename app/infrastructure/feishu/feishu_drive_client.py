@@ -8,6 +8,7 @@ from pathlib import Path
 
 import requests
 
+from app.config import settings
 from app.infrastructure.feishu.feishu_auth_client import FeishuAuthClient
 from app.shared.utils.retry import retry
 
@@ -17,12 +18,23 @@ class FeishuDriveClient:
 
     def __init__(self, auth_client: FeishuAuthClient):
         self.auth_client = auth_client
+        self.web_base_url = getattr(settings, "feishu_web_base_url", "https://feishu.cn").rstrip("/")
 
     def _headers(self) -> dict[str, str]:
         token = self.auth_client.get_tenant_access_token()
         return {
             "Authorization": f"Bearer {token}",
         }
+
+    def _build_folder_url(self, folder_token: str | None) -> str:
+        if not folder_token:
+            return ""
+        return f"{self.web_base_url}/drive/folder/{folder_token}"
+
+    def _build_file_url(self, file_token: str | None) -> str:
+        if not file_token:
+            return ""
+        return f"{self.web_base_url}/file/{file_token}"
 
     def create_folder(
         self,
@@ -57,8 +69,16 @@ class FeishuDriveClient:
             if data.get("code") != 0:
                 raise RuntimeError(f"创建飞书文件夹失败: {data}")
 
-            print(f"[FeishuDrive] 创建文件夹成功: token={data['data'].get('token')}")
-            return data["data"]
+            folder_data = data["data"]
+            folder_token = (
+                folder_data.get("token")
+                or folder_data.get("folder_token")
+                or folder_data.get("file_token")
+            )
+            folder_data["url"] = self._build_folder_url(folder_token)
+
+            print(f"[FeishuDrive] 创建文件夹成功: token={folder_token}")
+            return folder_data
 
         return retry(_create, retries=3, delay=1.0, backoff=2.0)
 
@@ -111,8 +131,12 @@ class FeishuDriveClient:
             if result.get("code") != 0:
                 raise RuntimeError(f"上传飞书文件失败: {result}")
 
-            print(f"[FeishuDrive] 文件上传成功: {file_name}")
-            return result["data"]
+            upload_data = result["data"]
+            file_token = upload_data.get("file_token") or upload_data.get("token")
+            upload_data["url"] = self._build_file_url(file_token)
+
+            print(f"[FeishuDrive] 文件上传成功: {file_name}, file_token={file_token}")
+            return upload_data
 
         return retry(_upload, retries=3, delay=1.0, backoff=2.0)
 
@@ -154,10 +178,11 @@ class FeishuDriveClient:
             print(f"[FeishuDrive] 压缩完成: {zip_path.name}")
             print(f"[FeishuDrive] zip 大小: {zip_size_mb:.2f} MB")
 
+            # 当前策略：不创建远端根目录，直接把 zip 上传到父文件夹
             print("[FeishuDrive] step1: 跳过创建文件夹，直接上传 zip")
             upload_parent_token = parent_folder_token
-            root_folder_url = ""
             root_folder_token = parent_folder_token
+            root_folder_url = self._build_folder_url(root_folder_token)
 
             print("[FeishuDrive] step2: 开始上传 zip 文件")
             uploaded = self.upload_file(
@@ -168,6 +193,9 @@ class FeishuDriveClient:
 
             upload_success = True
 
+            file_token = uploaded.get("file_token") or uploaded.get("token")
+            uploaded_file_url = uploaded.get("url") or self._build_file_url(file_token)
+
             return {
                 "success": True,
                 "root_folder_token": root_folder_token,
@@ -175,7 +203,8 @@ class FeishuDriveClient:
                 "uploaded_file_count": 1,
                 "uploaded_files": [uploaded],
                 "zip_file_name": zip_path.name,
-                "file_token": uploaded.get("file_token") or uploaded.get("token"),
+                "file_token": file_token,
+                "uploaded_file_url": uploaded_file_url,
             }
 
         except Exception as e:

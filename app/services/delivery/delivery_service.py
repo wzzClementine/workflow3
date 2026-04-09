@@ -7,6 +7,7 @@ from typing import Any
 
 from app.infrastructure.feishu import FeishuDriveClient
 from app.repositories.delivery_repo import DeliveryRecordRepository
+from app.repositories.task_repo import TaskRepository
 
 
 class DeliveryService:
@@ -14,9 +15,11 @@ class DeliveryService:
         self,
         drive_client: FeishuDriveClient,
         delivery_record_repository: DeliveryRecordRepository,
+        task_repository: TaskRepository,
     ):
         self.drive_client = drive_client
         self.delivery_record_repository = delivery_record_repository
+        self.task_repository = task_repository
 
     def deliver_package_to_feishu(
         self,
@@ -58,3 +61,74 @@ class DeliveryService:
             "record": record,
             "upload_result": upload_result,
         }
+
+    def get_result_by_task_id(self, task_id: str) -> dict[str, Any] | None:
+        record = self.delivery_record_repository.get_latest_success_by_task_id(task_id)
+        if not record:
+            return None
+
+        return {
+            "task_id": task_id,
+            "package_name": record.get("delivery_folder_name"),
+            "remote_url": record.get("remote_url"),
+        }
+
+    def get_latest_result_by_chat_id(self, chat_id: str) -> dict[str, Any] | None:
+        tasks = self.task_repository.list_by_chat_id(chat_id)
+        if not tasks:
+            return None
+
+        task_ids = [t["task_id"] for t in tasks if t.get("task_id")]
+        if not task_ids:
+            return None
+
+        record = self.delivery_record_repository.get_latest_success_by_task_ids(task_ids)
+        if not record:
+            return None
+
+        return {
+            "task_id": record.get("task_id"),
+            "package_name": record.get("delivery_folder_name"),
+            "remote_url": record.get("remote_url"),
+        }
+
+    def get_results_by_task_ids(self, task_ids: list[str]) -> list[dict[str, Any]]:
+        """
+        批量查询一组 task 对应的最新成功交付链接。
+        只返回查到成功交付记录的任务，保持输入 task_ids 的顺序。
+        """
+        results: list[dict[str, Any]] = []
+
+        for task_id in task_ids:
+            record = self.delivery_record_repository.get_latest_success_by_task_id(task_id)
+            if not record:
+                continue
+
+            results.append(
+                {
+                    "task_id": task_id,
+                    "package_name": record.get("delivery_folder_name"),
+                    "remote_url": record.get("remote_url"),
+                }
+            )
+
+        return results
+
+    def get_completed_task_results_by_chat_id(self, chat_id: str) -> list[dict[str, Any]]:
+        """
+        查询当前 chat 下所有已完成任务的交付链接。
+        只返回真正能查到成功 delivery 记录的任务。
+        """
+        tasks = self.task_repository.list_by_chat_id(chat_id)
+        if not tasks:
+            return []
+
+        completed_task_ids = [
+            t["task_id"]
+            for t in tasks
+            if t.get("task_id") and t.get("status") == "completed"
+        ]
+        if not completed_task_ids:
+            return []
+
+        return self.get_results_by_task_ids(completed_task_ids)

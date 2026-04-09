@@ -16,3 +16,5 @@ runtime_data/
 Thumbs.db
 
 .test_files/
+
+test.py

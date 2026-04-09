@@ -118,7 +118,10 @@ class IngestMaterialsTool(BaseTool):
             return ToolResult(
                 tool_name=self.name,
                 success=True,
-                message="材料已齐全，文件已准备好，请确认是否开始处理。回复“开始”即可继续。",
+                message=(
+                    f"{materials_text}\n"
+                    "当前材料已齐全，请确认是否开始处理。回复“开始”即可继续。"
+                ),
                 data={
                     "created_records": created_records,
                     "materials_summary": materials_summary,
@@ -129,7 +132,7 @@ class IngestMaterialsTool(BaseTool):
         return ToolResult(
             tool_name=self.name,
             success=True,
-            message="文件已记录并下载到本地，但材料暂未齐全",
+            message=f"{materials_text} 请继续上传缺失材料。",
             data={
                 "created_records": created_records,
                 "materials_summary": materials_summary,

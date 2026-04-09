@@ -1,454 +1,341 @@
-# 🧠 自动试卷处理 Agent 系统
+# 🧠 Workflow3 - Agent-Based Exam Processing System
 
-本项目是一个基于 Agent 架构的自动试卷处理系统，支持从飞书上传 PDF → 自动解析 → 结构化 → 生成 Excel → 打包 → 回传飞书。
+## 📌 项目简介
+
+Workflow3 是一个基于 **Agent 架构** 的自动试卷处理系统，集成飞书机器人作为交互入口，实现从 PDF 上传到结构化结果交付的全流程自动化处理。
+
+系统支持用户通过飞书上传试卷与解析 PDF，并自动完成：
+
+- PDF 转图片
+- 试题切分 / 解析切分
+- OCR 识别
+- 多模态模型（Qwen-VL）提取答案与知识点
+- manifest.json 构建
+- Excel（tags.xlsx）生成
+- 文件打包
+- 上传飞书云盘
+- 返回下载链接
 
 ---
 
-# 🧩 一、系统整体架构
+## 🚀 核心能力
+
+### ✅ 自动化试卷处理
+
+完整流程：
 
 ```text
-用户（飞书）
-    ↓
-Webhook
-    ↓
-AgentOrchestrator（核心调度）
-    ↓
-Tool（标准执行单元）
-    ↓
-Service / Builder（业务逻辑）
-    ↓
-Infrastructure（外部系统：OCR / LLM / 飞书）
-    ↓
-本地文件系统 + SQLite
+PDF → 图片 → 切题 → OCR → LLM解析 → 结构化 → Excel → 打包 → 上传
 ```
 
 
-# 二、完整处理流程
+---
+
+### ✅ Agent 对话能力
+
+系统不仅是工具链，更是一个具备状态感知的 Agent：
+
+支持：
+
+- 当前任务理解
+- 历史任务理解
+- 材料状态感知
+- 多轮对话驱动流程
+
+---
+
+### ✅ 任务控制能力（B2.2）
+
+用户可以通过自然语言控制任务：
+
+| 功能 | 示例 |
+|------|------|
+| 取消任务 | `取消这个任务` |
+| 重新开始 | `重新开始` |
+| 查询当前任务 | `我当前任务是什么` |
+| 查询缺失材料 | `我目前有哪些任务缺材料` |
+
+---
+
+### ✅ 结果查询能力
+
+| 查询类型 | 示例 |
+|--------|------|
+| 最近结果 | `把结果给我` |
+| 当前任务结果 | `当前任务的下载链接` |
+| 已完成任务链接 | `给我完成任务的访问链接` |
+
+---
+
+### ✅ 上传智能接管（B2.2-4）
+
+系统自动判断用户上传行为：
+
+| 当前状态 | 行为 |
+|--------|------|
+| collecting_materials | 补充材料 |
+| waiting_confirmation | 覆盖/补充 |
+| processing | 创建新任务 |
+| completed / failed | 创建新任务 |
+
+---
+
+## 🏗️ 系统架构
+
+### 总体架构
 ```text
-1. 用户上传 PDF（飞书）
-2. webhook 接收 → 转 AgentEvent
-3. ingest_materials
-   → 下载 PDF 到本地
-4. waiting_confirmation
-5. 用户确认
-6. process_paper
-   → PDF → 图片 → 切题 → 切解析 → 清洗
-7. build_manifest（LLM）
-8. write_excel
-9. package_results
-10. deliver_results（上传飞书）
-```
-
-## 📦 三、模块详细说明
-
----
-
-### 1️⃣ Agent 层（核心控制）
-
-#### 📄 `app/agent/orchestrator/agent_orchestrator.py`
-
-**功能：**
-
-* 系统核心调度器（大脑）
-* 控制完整处理流程（Pipeline）
-* 管理状态机（任务阶段）
-* 调度 Tool 执行
-* 推送飞书进度消息
-
-**输入：**
-
-```python
-AgentEvent
-```
-
-**输出：**
-
-```python
-AgentResult
-```
-
-**核心职责：**
-
-* 判断当前任务阶段（collecting / confirmation / processing）
-* 串联完整流程：
-
-  ```
-  process_paper → build_manifest → write_excel → package → deliver
-  ```
-* 控制执行顺序
-* 统一用户反馈（飞书）
-
----
-
-#### 📄 `app/agent/schema/agent_event.py`
-
-**功能：**
-定义系统输入事件结构
-
-**数据结构：**
-
-```python
-AgentEvent:
-    chat_id
-    event_type
-    user_message
-    files
-
-UploadedFile:
-    file_name
-    file_key
-    message_id
+Feishu Bot
+↓
+AgentOrchestrator（唯一入口）
+↓
+Planner（决策）
+↓
+MemoryFacade（上下文）
+↓
+Services（业务逻辑）
+↓
+Tools（执行）
+↓
+Repositories（数据持久化）
 ```
 
 ---
 
-#### 📄 `app/agent/schema/agent_result.py`
+## 🧩 核心模块说明
 
-**功能：**
-定义系统输出结构
+### 1️⃣ AgentOrchestrator（核心控制器）
 
-```python
-AgentResult:
-    status
-    message
-    task_id
-    snapshot
-```
+> 📍 唯一入口（Single Entry Point）
 
----
+职责：
 
-### 2️⃣ Tool 层（执行单元）
-
-> 所有 orchestrator 调用的模块必须是 Tool
+- 解析用户输入
+- 判断用户意图
+- 调度任务执行
+- 控制任务生命周期
+- 调用 Planner / Memory / Tools
 
 ---
 
-#### 📄 `IngestMaterialsTool`
+### 2️⃣ MemoryFacade（记忆系统）
 
-路径：`app/skills/ingestion/ingest_materials_tool.py`
+统一管理：
 
-**功能：**
+- 当前任务状态
+- 历史任务
+- 材料状态
+- Agent Snapshot
 
-* 解析飞书上传文件
-* 下载 PDF 到本地
-* 写入任务文件记录
+核心能力：
 
-**输入：**
-
-```python
-task_id
-files[]
-```
-
-**输出：**
-
-```python
-materials_summary
-```
+- build_agent_snapshot()
+- get_current_task_id()
+- 多任务状态聚合
 
 ---
 
-#### 📄 `ProcessPaperTool`
+### 3️⃣ TaskService / SessionService
 
-路径：`app/skills/processing/process_paper_tool.py`
+#### TaskService
 
-**功能：**
-执行核心图像处理流程：
+- 创建任务
+- 更新状态
+- 查询任务
 
-```
-PDF → 图片 → 切题 → 切解析 → 清洗
-```
+#### SessionService
 
-**输出：**
-
-```python
-{
-    task_root,
-    question_output_root,
-    analysis_output_root,
-    cleaned_output_root
-}
-```
+- chat ↔ task 绑定
+- 当前任务管理
+- 会话状态管理
 
 ---
 
-#### 📄 `BuildManifestTool`
+### 4️⃣ DeliveryService（交付层）
 
-路径：`app/skills/manifest/build_manifest_tool.py`
+负责：
 
-**功能：**
+- 上传飞书云盘
+- 生成交付记录（delivery_records）
+- 提供下载链接
 
-* 调用视觉 LLM
-* 解析题目内容
-* 构建结构化数据
+关键能力：
 
-**输入：**
-
-```python
-question_root_dir
-analysis_root_dir
-```
-
-**输出：**
-
-```json
-manifest.json
-```
+- get_latest_result_by_chat_id
+- get_result_by_task_id
+- get_completed_task_results_by_chat_id
 
 ---
 
-#### 📄 `WriteExcelTool`
+### 5️⃣ Tools（执行层）
 
-路径：`app/skills/excel/write_excel_tool.py`
+系统核心流水线：
 
-**功能：**
-
-* 将 manifest 转换为 Excel
-* 按模板生成试卷结构表
-
-**输入：**
-
-```python
-manifest_path
-```
-
-**输出：**
-
-```python
-excel_path
-```
+| Tool | 功能 |
+|------|------|
+| process_paper | PDF处理 + 切题 |
+| build_manifest | 构建结构数据 |
+| write_excel | 生成 tags.xlsx |
+| package_results | 打包结果 |
+| deliver_results | 上传飞书 |
 
 ---
 
-#### 📄 `PackagingTool`
+## 📦 数据结构设计
 
-路径：`app/skills/packaging/packaging_tool.py`
+### tasks 表
 
-**功能：**
-构建最终交付目录：
-
-```
-delivery/
-    excel/
-    question_images/
-    analysis_images/
-```
-
-**输出：**
-
-```python
-local_package_path
-```
+| 字段 | 含义 |
+|------|------|
+| task_id | 任务ID |
+| chat_id | 会话ID |
+| status | 状态 |
+| current_stage | 当前阶段 |
 
 ---
 
-#### 📄 `DeliverResultsTool`
+### task_memory 表
 
-路径：`app/skills/delivery/deliver_results_tool.py`
-
-**功能：**
-
-* 上传交付文件到飞书云
-* 记录 delivery 信息
-
-**输出：**
-
-```python
-remote_url
-```
+| 字段 | 含义 |
+|------|------|
+| current_stage | 当前阶段 |
+| files_summary_json | 材料状态 |
+| processing_summary | 文本摘要 |
 
 ---
 
-### 3️⃣ Service / Builder 层（业务逻辑）
+### chat_sessions 表
+
+| 字段 | 含义 |
+|------|------|
+| current_task_id | 当前任务 |
+| current_mode | 状态 |
+| waiting_for | 等待内容 |
 
 ---
 
-#### 📄 `LLMManifestBuilder`
+### delivery_records 表
 
-路径：`app/skills/manifest/manifest_builder.py`
-
-**功能：**
-
-* 调用视觉 LLM
-* 解析题目结构
-* 生成标准化数据
-
-**输出结构：**
-
-```json
-{
-  "question_type": "...",
-  "answer": "...",
-  "score": ...,
-  "knowledge_points": [...]
-}
-```
+| 字段 | 含义 |
+|------|------|
+| task_id | 任务ID |
+| remote_url | 下载链接 |
+| delivery_status | 是否成功 |
 
 ---
 
-#### 📄 `ExcelWriter`
-
-路径：`app/skills/excel/excel_writer.py`
-
-**功能：**
-
-* 读取 manifest.json
-* 写入 Excel 模板
-* 生成结构化表格
-
----
-
-#### 📄 `PackagingService`
-
-路径：`app/skills/packaging/packaging_service.py`
-
-**功能：**
-
-* 整理输出文件
-* 构建交付目录结构
-* 复制资源文件
-
----
-
-### 4️⃣ Infrastructure 层（外部系统）
-
----
-
-#### 📄 `feishu_message_file_client.py`
-
-**功能：**
-
+## 🔁 任务生命周期
 ```text
-file_key → 下载本地文件
+collecting_materials
+↓
+waiting_confirmation
+↓
+processing
+↓
+completed / failed / cancelled
 ```
 
----
-
-#### 📄 `feishu_drive_client.py`
-
-**功能：**
-
-```text
-本地文件 → 上传飞书云盘
-```
 
 ---
 
-#### 📄 `feishu_message_sender.py`
+## 🧠 Agent能力分层（Phase B）
 
-**功能：**
-发送飞书消息（进度推送）
+### ✅ B1：任务理解
 
-示例：
-
-```
-📥 接收文件
-🛠️ 处理中
-🧠 分析中
-📊 生成Excel
-📦 打包
-☁️ 上传
-🎉 完成
-```
+- 当前任务
+- 当前阶段
+- 材料完整性
 
 ---
 
-#### 📄 `tencent_ocr_client.py`
+### ✅ B2：历史理解
 
-**功能：**
-图像 OCR 识别
-
----
-
-#### 📄 `vision_llm_client.py`
-
-**功能：**
-多模态推理（图像 → 结构化数据）
+- 历史任务
+- 上次失败原因
+- 重跑能力
 
 ---
 
-### 5️⃣ 数据层
+### ✅ B2.2：交互能力
+
+- 任务控制（取消/重启）
+- 结果查询
+- 上传接管
+- 材料缺失分析
 
 ---
 
-#### 📄 `sqlite_manager.py`
+## ⚙️ 开发原则（非常重要）
 
-**功能：**
-管理 SQLite 数据库
+### ❗ 架构约束
 
-**主要表：**
-
-* tasks
-* task_files
-* delivery_records
-* memory
+- 单入口：AgentOrchestrator
+- Memory 驱动
+- Tool 不做决策
+- Service 不做对话
 
 ---
 
-### 6️⃣ 工具层
+### ❗ 修改原则
+
+- 不重构已有流程
+- 最小侵入修改
+- 不影响成功路径
+- 所有新增逻辑必须可回退
 
 ---
 
-#### 📄 `retry.py`
+## 🧪 测试建议
 
-路径：`app/shared/utils/retry.py`
+### 必测场景
 
-**功能：**
-统一重试机制：
-
-* LLM 请求失败
-* OCR 失败
-* 网络异常
-
----
-
-### 7️⃣ API 层
+- 单任务完整流程
+- 多任务并发上传
+- 中途取消任务
+- 上传覆盖 / 新建任务
+- 查询结果（当前 / 历史）
 
 ---
 
-#### 📄 `app/main.py`
+## 📈 后续优化方向
 
-**功能：**
+### 🔶 B2.2-3（进阶）
 
-* 初始化所有组件
-* 注册 Tool
-* 启动 FastAPI
-* 注入 orchestrator
-
----
-
-#### 📄 `feishu_webhook.py`
-
-**功能：**
-
-```text
-飞书事件 → AgentEvent → orchestrator
-```
+- 只重跑某一步
+  - 只重跑 Excel
+  - 只重新打包
 
 ---
 
-## 📌 模块关系总结
+### 🔶 多任务可视化
 
-```text
-AgentOrchestrator
-    ↓
-Tool（统一执行入口）
-    ↓
-Service / Builder（业务逻辑）
-    ↓
-Infrastructure（外部系统）
-    ↓
-文件系统 / 数据库
-```
+- 每个任务独立进度
+- 明确 task_id 映射
 
 ---
 
-## 🎯 核心设计原则
+### 🔶 任务选择能力
 
-```
-1. orchestrator 只负责流程控制
-2. Tool 是唯一执行入口
-3. Service 负责逻辑
-4. Infrastructure 负责外部交互
-```
+- “操作第2个任务”
+- “继续刚才那个任务”
 
+---
+
+## 🧑‍💻 技术栈
+
+- Python
+- FastAPI
+- SQLite
+- Feishu OpenAPI
+- Qwen-VL（多模态模型）
+
+---
+
+## 📌 项目特点总结
+
+✅ Agent 驱动（不是脚本）  
+✅ 多任务状态管理  
+✅ 对话式任务控制  
+✅ 结构清晰、可扩展  
+✅ 工程级可维护  
+
+---

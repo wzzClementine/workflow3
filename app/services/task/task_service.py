@@ -118,3 +118,22 @@ class TaskService:
             raise ValueError(f"任务不存在: {task_id}")
 
         return task
+
+    def mark_cancelled(
+        self,
+        task_id: str,
+    ) -> dict[str, Any]:
+        task = self.task_repository.update_status(task_id, "cancelled")
+        task = self.task_repository.update_stage(task_id, "cancelled")
+
+        self.task_memory_repository.upsert_memory(
+            task_id=task_id,
+            current_stage="cancelled",
+            processing_summary="任务已取消",
+            next_action_hint="如需继续，请重新开始或重新上传材料",
+        )
+
+        if not task:
+            raise ValueError(f"任务不存在: {task_id}")
+
+        return task

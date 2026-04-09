@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from enum import Enum
 
 
@@ -12,3 +10,4 @@ class TaskState(str, Enum):
     DELIVERING = "delivering"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"

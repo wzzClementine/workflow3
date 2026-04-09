@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from datetime import datetime
 from typing import Any
 
@@ -111,6 +109,23 @@ class ChatSessionRepository:
             WHERE chat_id = ?
             """,
             (current_task_id, now, chat_id),
+        )
+
+        return self.get_by_chat_id(chat_id)
+
+    def clear_current_task(
+        self,
+        chat_id: str,
+    ) -> dict[str, Any] | None:
+        now = datetime.now().isoformat(timespec="seconds")
+
+        self.sqlite_manager.execute(
+            """
+            UPDATE chat_sessions
+            SET current_task_id = NULL, updated_at = ?
+            WHERE chat_id = ?
+            """,
+            (now, chat_id),
         )
 
         return self.get_by_chat_id(chat_id)

@@ -101,6 +101,7 @@ def build_app_components() -> dict:
     delivery_service = DeliveryService(
         drive_client=feishu_drive_client,
         delivery_record_repository=delivery_record_repository,
+        task_repository=task_repository,
     )
 
     # ========= agent helper =========
@@ -202,6 +203,7 @@ def build_app_components() -> dict:
         tool_executor=tool_executor,
         confirmation_policy=confirmation_policy,
         feishu_message_sender=feishu_message_sender,
+        delivery_service=delivery_service
     )
 
     return {

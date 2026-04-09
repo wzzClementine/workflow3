@@ -196,15 +196,14 @@ class MemoryFacade:
             materials_text = self._fmt_material_pair(latest_materials_summary)
             last_error = task.get("last_error")
 
-            if task_id == current_task_id:
-                relation = "current"
-            else:
-                relation = "history"
+            relation = "current" if task_id == current_task_id else "history"
 
             if status == "completed":
                 status_text = "已完成"
             elif status == "failed":
                 status_text = "失败"
+            elif status == "cancelled":
+                status_text = "已取消"
             else:
                 if stage == "waiting_confirmation":
                     status_text = "等待确认"
@@ -212,6 +211,8 @@ class MemoryFacade:
                     status_text = "收集材料中"
                 elif stage == "processing":
                     status_text = "处理中"
+                elif stage == "delivering":
+                    status_text = "上传结果中"
                 else:
                     status_text = "进行中"
 
@@ -228,6 +229,127 @@ class MemoryFacade:
             )
 
         return readable
+
+    def get_task_display_name(
+        self,
+        task_id: str | None,
+    ) -> str:
+        if not task_id:
+            return "未命名任务"
+
+        latest_materials_summary = self.task_file_service.get_latest_materials_summary(task_id)
+        blank_name = latest_materials_summary.get("blank_pdf_name")
+        solution_name = latest_materials_summary.get("solution_pdf_name")
+
+        if blank_name:
+            return blank_name
+        if solution_name:
+            return solution_name
+
+        return f"任务({task_id})"
+
+    def list_missing_material_tasks(
+        self,
+        chat_id: str,
+    ) -> list[dict[str, Any]]:
+        tasks = self.task_service.list_tasks_by_chat_id(chat_id) or []
+        results: list[dict[str, Any]] = []
+
+        for task in tasks:
+            task_id = task.get("task_id")
+            if not task_id:
+                continue
+
+            status = task.get("status")
+            stage = task.get("current_stage")
+
+            if status in {"completed", "failed", "cancelled"}:
+                continue
+
+            if stage not in {"collecting_materials", "waiting_confirmation"}:
+                continue
+
+            latest_materials_summary = self.task_file_service.get_latest_materials_summary(task_id)
+            has_blank = bool(latest_materials_summary.get("has_blank_pdf"))
+            has_solution = bool(latest_materials_summary.get("has_solution_pdf"))
+
+            # 完全空任务不纳入“缺材料任务”列表
+            if not has_blank and not has_solution:
+                continue
+
+            # 材料已齐全也不纳入列表
+            if has_blank and has_solution:
+                continue
+
+            display_name = self.get_task_display_name(task_id)
+
+            missing_parts: list[str] = []
+            uploaded_parts: list[str] = []
+
+            if has_blank:
+                uploaded_parts.append("试卷 PDF")
+            if has_solution:
+                uploaded_parts.append("答案解析 PDF")
+
+            if not has_blank:
+                missing_parts.append("空白试卷 PDF")
+            if not has_solution:
+                missing_parts.append("答案解析 PDF")
+
+            results.append(
+                {
+                    "task_id": task_id,
+                    "display_name": display_name,
+                    "uploaded_parts": uploaded_parts,
+                    "missing_parts": missing_parts,
+                    "stage": stage,
+                    "status": status,
+                    "latest_materials_summary": latest_materials_summary,
+                }
+            )
+
+        return results
+
+    def list_empty_material_tasks(
+        self,
+        chat_id: str,
+    ) -> list[dict[str, Any]]:
+        tasks = self.task_service.list_tasks_by_chat_id(chat_id) or []
+        results: list[dict[str, Any]] = []
+
+        for task in tasks:
+            task_id = task.get("task_id")
+            if not task_id:
+                continue
+
+            status = task.get("status")
+            stage = task.get("current_stage")
+
+            if status in {"completed", "failed", "cancelled"}:
+                continue
+
+            if stage not in {"collecting_materials", "waiting_confirmation"}:
+                continue
+
+            latest_materials_summary = self.task_file_service.get_latest_materials_summary(task_id)
+            has_blank = bool(latest_materials_summary.get("has_blank_pdf"))
+            has_solution = bool(latest_materials_summary.get("has_solution_pdf"))
+
+            # 只保留一个材料都没上传过的空任务
+            if has_blank or has_solution:
+                continue
+
+            results.append(
+                {
+                    "task_id": task_id,
+                    "display_name": self.get_task_display_name(task_id),
+                    "stage": stage,
+                    "status": status,
+                    "latest_materials_summary": latest_materials_summary,
+                }
+            )
+
+        return results
 
     def build_agent_snapshot(
         self,

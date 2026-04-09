@@ -50,6 +50,18 @@ class ChatSessionService:
 
         return updated
 
+    def unbind_task(
+        self,
+        chat_id: str,
+    ) -> dict[str, Any]:
+        self.ensure_session(chat_id)
+
+        updated = self.chat_session_repository.clear_current_task(chat_id)
+        if not updated:
+            raise ValueError(f"解绑当前 task 失败: {chat_id}")
+
+        return updated
+
     def set_waiting_for(
         self,
         chat_id: str,

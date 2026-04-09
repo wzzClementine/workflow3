@@ -11,10 +11,131 @@ from app.agent.state import TaskState
 from app.agent.tools import ToolCall, ToolExecutor
 from app.services.task import TaskService
 from app.services.session import ChatSessionService
+from app.services.delivery import DeliveryService
 from app.infrastructure.feishu import FeishuMessageSender
 
 
 class AgentOrchestrator:
+    CANCEL_KEYWORDS = {
+        "取消",
+        "取消任务",
+        "取消这个任务",
+        "不要这个了",
+        "停止处理",
+        "停止",
+        "先别做了",
+        "算了",
+    }
+
+    RESTART_KEYWORDS = {
+        "重新开始",
+        "新建一个任务",
+        "从头再来",
+        "从头开始",
+        "重来",
+    }
+
+    RESULT_QUERY_KEYWORDS = {
+        "结果",
+        "下载链接",
+        "结果给我",
+        "再发我一次",
+        "刚刚那个结果",
+        "结果在哪",
+        "上一个任务结果",
+        "上一个任务的结果",
+        "最近一次结果",
+        "最近一次处理结果",
+    }
+
+    CURRENT_TASK_RESULT_QUERY_KEYWORDS = {
+        "当前任务结果",
+        "当前任务的结果",
+        "当前任务下载链接",
+        "当前任务的下载链接",
+        "这个任务的结果",
+        "这个任务结果",
+        "这个任务的下载链接",
+        "这个任务下载链接",
+        "把这个任务的结果给我",
+        "把这个任务的下载链接给我",
+        "把他的下载链接给我",
+        "把它的下载链接给我",
+        "他的下载链接",
+        "它的下载链接",
+    }
+
+    MISSING_MATERIALS_QUERY_KEYWORDS = {
+        "哪些任务还缺材料",
+        "哪些任务缺材料",
+        "有哪些任务还缺材料",
+        "有哪些任务缺材料",
+        "目前有哪些任务还缺材料",
+        "当前有哪些任务还缺材料",
+        "我目前有哪些任务缺材料",
+        "还有哪些任务缺材料",
+        "有哪些任务没传完",
+        "哪些任务没传完",
+    }
+
+    CANCEL_EMPTY_TASKS_KEYWORDS = {
+        "把没有上传任何材料的任务都取消掉",
+        "把没有上传任何材料的任务全部取消掉",
+        "把什么材料都没有上传的任务都取消掉",
+        "把什么材料都没有上传的任务全部取消掉",
+        "把空任务都取消掉",
+        "把空任务全部取消掉",
+        "把没上传材料的任务都取消掉",
+        "把没上传材料的任务全部取消掉",
+    }
+
+    CANCEL_MISSING_TASKS_KEYWORDS = {
+        "把缺材料的任务都取消掉",
+        "把缺材料的任务全部取消掉",
+        "把待补材料任务都取消掉",
+        "把待补材料任务全部取消掉",
+        "把上面这些任务都取消掉",
+        "把上面这些任务全部取消掉",
+        "把上面这三个任务都取消掉",
+        "上面这三个任务都取消掉",
+        "上面这些任务都取消掉",
+    }
+
+    COMPLETED_TASK_LINK_QUERY_KEYWORDS = {
+        "完成任务的访问链接",
+        "已完成任务的访问链接",
+        "已完成任务的下载链接",
+        "已完成任务的文件链接",
+        "完成任务的下载链接",
+        "完成任务的文件链接",
+        "他们的文件链接",
+        "他们的访问链接",
+        "刚才那些已完成任务的链接",
+        "给我完成任务的访问链接",
+        "我想要他们的文件链接",
+        "我要他们的文件链接",
+        "我要已完成任务的链接",
+    }
+
+    TERMINAL_STATUSES = {
+        TaskState.COMPLETED.value,
+        TaskState.FAILED.value,
+        TaskState.CANCELLED.value,
+    }
+
+    MATERIAL_EDITABLE_STAGES = {
+        TaskState.COLLECTING_MATERIALS.value,
+        TaskState.WAITING_CONFIRMATION.value,
+    }
+
+    NEW_TASK_ON_UPLOAD_STAGES = {
+        TaskState.PROCESSING.value,
+        TaskState.DELIVERING.value,
+        TaskState.COMPLETED.value,
+        TaskState.FAILED.value,
+        TaskState.CANCELLED.value,
+    }
+
     def __init__(
         self,
         task_service: TaskService,
@@ -24,6 +145,7 @@ class AgentOrchestrator:
         tool_executor: ToolExecutor,
         confirmation_policy: ConfirmationPolicy,
         feishu_message_sender: FeishuMessageSender,
+        delivery_service: DeliveryService,
     ):
         self.task_service = task_service
         self.chat_session_service = chat_session_service
@@ -32,6 +154,25 @@ class AgentOrchestrator:
         self.tool_executor = tool_executor
         self.confirmation_policy = confirmation_policy
         self.feishu_message_sender = feishu_message_sender
+        self.delivery_service = delivery_service
+
+    def _get_task_display_name(self, task_id: str | None) -> str:
+        return self.memory_facade.get_task_display_name(task_id)
+
+    def _with_task_prefix(self, task_id: str | None, text: str) -> str:
+        display_name = self._get_task_display_name(task_id)
+        return f"【{display_name}】{text}"
+
+    def _send_task_text(
+        self,
+        chat_id: str,
+        task_id: str | None,
+        text: str,
+    ) -> None:
+        self.feishu_message_sender.send_text(
+            chat_id,
+            self._with_task_prefix(task_id, text),
+        )
 
     def _run_planner_flow(
         self,
@@ -73,6 +214,552 @@ class AgentOrchestrator:
             snapshot=snapshot,
         )
 
+    def _is_cancel_message(self, text: str | None) -> bool:
+        if not text:
+            return False
+        normalized = text.strip().lower()
+        return any(keyword in normalized for keyword in self.CANCEL_KEYWORDS)
+
+    def _is_restart_message(self, text: str | None) -> bool:
+        if not text:
+            return False
+        normalized = text.strip().lower()
+        return any(keyword in normalized for keyword in self.RESTART_KEYWORDS)
+
+    def _is_current_task_result_query(self, text: str | None) -> bool:
+        if not text:
+            return False
+        normalized = text.strip().lower()
+        return any(keyword in normalized for keyword in self.CURRENT_TASK_RESULT_QUERY_KEYWORDS)
+
+    def _is_result_query(self, text: str | None) -> bool:
+        if not text:
+            return False
+        normalized = text.strip().lower()
+        return any(keyword in normalized for keyword in self.RESULT_QUERY_KEYWORDS)
+
+    def _is_missing_materials_query(self, text: str | None) -> bool:
+        if not text:
+            return False
+        normalized = text.strip().lower()
+        return any(keyword in normalized for keyword in self.MISSING_MATERIALS_QUERY_KEYWORDS)
+
+    def _is_cancel_empty_tasks_message(self, text: str | None) -> bool:
+        if not text:
+            return False
+        normalized = text.strip().lower()
+        return any(keyword in normalized for keyword in self.CANCEL_EMPTY_TASKS_KEYWORDS)
+
+    def _is_cancel_missing_tasks_message(self, text: str | None) -> bool:
+        if not text:
+            return False
+        normalized = text.strip().lower()
+        return any(keyword in normalized for keyword in self.CANCEL_MISSING_TASKS_KEYWORDS)
+
+    def _is_completed_task_link_query(self, text: str | None) -> bool:
+        if not text:
+            return False
+        normalized = text.strip().lower()
+        return any(keyword in normalized for keyword in self.COMPLETED_TASK_LINK_QUERY_KEYWORDS)
+
+    def _handle_cancel_current_task(
+        self,
+        chat_id: str,
+        task_id: str | None,
+    ) -> AgentResult:
+        if not task_id:
+            snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+            return AgentResult(
+                status="ok",
+                message="当前没有进行中的任务可取消。",
+                task_id=None,
+                snapshot=snapshot,
+            )
+
+        self.task_service.mark_cancelled(task_id)
+        self.chat_session_service.unbind_task(chat_id)
+        self.chat_session_service.clear_waiting_for(chat_id)
+        self.chat_session_service.update_summary_memory(
+            chat_id=chat_id,
+            summary_memory=f"已取消当前任务 {task_id}，当前会话无进行中的任务",
+        )
+
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        return AgentResult(
+            status="ok",
+            message="好的，当前任务已取消。现在没有进行中的任务了。如需继续，你可以重新开始，或重新上传材料。",
+            task_id=None,
+            snapshot=snapshot,
+        )
+
+    def _handle_cancel_empty_tasks(
+        self,
+        chat_id: str,
+        current_task_id: str | None,
+    ) -> AgentResult:
+        empty_tasks = self.memory_facade.list_empty_material_tasks(chat_id)
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        if not empty_tasks:
+            return AgentResult(
+                status="ok",
+                message="当前没有未上传任何材料的空任务可取消。",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        cancelled_ids: list[str] = []
+        for item in empty_tasks:
+            task_id = item.get("task_id")
+            if not task_id:
+                continue
+            self.task_service.mark_cancelled(task_id)
+            cancelled_ids.append(task_id)
+
+        if current_task_id in cancelled_ids:
+            self.chat_session_service.unbind_task(chat_id)
+            self.chat_session_service.clear_waiting_for(chat_id)
+
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        return AgentResult(
+            status="ok",
+            message=f"好的，已取消 {len(cancelled_ids)} 个未上传任何材料的空任务。",
+            task_id=None if current_task_id in cancelled_ids else current_task_id,
+            snapshot=snapshot,
+        )
+
+    def _handle_cancel_missing_tasks(
+        self,
+        chat_id: str,
+        current_task_id: str | None,
+    ) -> AgentResult:
+        missing_tasks = self.memory_facade.list_missing_material_tasks(chat_id)
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        if not missing_tasks:
+            return AgentResult(
+                status="ok",
+                message="当前没有仍然缺材料的任务可取消。",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        cancelled_ids: list[str] = []
+        for item in missing_tasks:
+            task_id = item.get("task_id")
+            if not task_id:
+                continue
+            self.task_service.mark_cancelled(task_id)
+            cancelled_ids.append(task_id)
+
+        if current_task_id in cancelled_ids:
+            self.chat_session_service.unbind_task(chat_id)
+            self.chat_session_service.clear_waiting_for(chat_id)
+
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        return AgentResult(
+            status="ok",
+            message=f"好的，已取消 {len(cancelled_ids)} 个缺材料任务。",
+            task_id=None if current_task_id in cancelled_ids else current_task_id,
+            snapshot=snapshot,
+        )
+
+    def _build_current_task_no_result_message(
+        self,
+        snapshot: dict,
+    ) -> str:
+        current_task_summary = snapshot.get("current_task_summary") or {}
+        latest_materials_summary = current_task_summary.get("latest_materials_summary") or {}
+        stage = current_task_summary.get("stage")
+        status = current_task_summary.get("status")
+
+        has_blank = latest_materials_summary.get("has_blank_pdf")
+        has_solution = latest_materials_summary.get("has_solution_pdf")
+
+        if status == TaskState.CANCELLED.value:
+            return "当前任务已取消，因此没有可获取的处理结果。"
+
+        if status == TaskState.FAILED.value:
+            return "当前任务执行失败，因此暂时没有可获取的处理结果。"
+
+        if stage == TaskState.COLLECTING_MATERIALS.value:
+            if has_blank and not has_solution:
+                return (
+                    "当前任务还没有可获取的处理结果。\n"
+                    "目前该任务仍处于材料收集阶段，已上传试卷 PDF，但还缺答案解析 PDF。"
+                    "请继续上传缺失材料，处理完成后我再把下载链接发给你。"
+                )
+            if has_solution and not has_blank:
+                return (
+                    "当前任务还没有可获取的处理结果。\n"
+                    "目前该任务仍处于材料收集阶段，已上传答案解析 PDF，但还缺空白试卷 PDF。"
+                    "请继续上传缺失材料，处理完成后我再把下载链接发给你。"
+                )
+            return (
+                "当前任务还没有可获取的处理结果。\n"
+                "目前该任务仍处于材料收集阶段，请先上传完整材料并完成处理。"
+            )
+
+        if stage == TaskState.WAITING_CONFIRMATION.value:
+            return (
+                "当前任务还没有可获取的处理结果。\n"
+                "目前材料已经收齐，但你还没有确认开始处理。回复“开始”后，处理完成我再把下载链接发给你。"
+            )
+
+        if stage == TaskState.PROCESSING.value:
+            return "当前任务正在处理中，暂时还没有可获取的下载链接。处理完成后我会返回结果。"
+
+        if stage == TaskState.DELIVERING.value:
+            return "当前任务正在上传交付结果，暂时还没有可获取的下载链接。上传完成后我会返回结果。"
+
+        return "当前任务还没有可获取的处理结果，请先完成处理。"
+
+    def _handle_current_task_result_query(
+        self,
+        chat_id: str,
+        current_task_id: str | None,
+    ) -> AgentResult:
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        if not current_task_id:
+            return AgentResult(
+                status="ok",
+                message="当前没有进行中的任务，因此也没有当前任务的下载链接。",
+                task_id=None,
+                snapshot=snapshot,
+            )
+
+        result = self.delivery_service.get_result_by_task_id(current_task_id)
+        if result:
+            return AgentResult(
+                status="ok",
+                message=(
+                    "找到了当前任务的处理结果：\n\n"
+                    f"📁 交付文件夹：{result['package_name']}\n"
+                    f"🔗 下载链接：{result['remote_url']}"
+                ),
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        return AgentResult(
+            status="ok",
+            message=self._build_current_task_no_result_message(snapshot),
+            task_id=current_task_id,
+            snapshot=snapshot,
+        )
+
+    def _handle_result_query(
+        self,
+        chat_id: str,
+        current_task_id: str | None,
+    ) -> AgentResult:
+        if current_task_id:
+            result = self.delivery_service.get_result_by_task_id(current_task_id)
+            if result:
+                return AgentResult(
+                    status="ok",
+                    message=(
+                        "找到了当前任务的处理结果：\n\n"
+                        f"📁 交付文件夹：{result['package_name']}\n"
+                        f"🔗 下载链接：{result['remote_url']}"
+                    ),
+                    task_id=current_task_id,
+                    snapshot=self.memory_facade.build_agent_snapshot(chat_id),
+                )
+
+        result = self.delivery_service.get_latest_result_by_chat_id(chat_id)
+        if result:
+            return AgentResult(
+                status="ok",
+                message=(
+                    "找到了最近一次处理结果：\n\n"
+                    f"📁 交付文件夹：{result['package_name']}\n"
+                    f"🔗 下载链接：{result['remote_url']}"
+                ),
+                task_id=result["task_id"],
+                snapshot=self.memory_facade.build_agent_snapshot(chat_id),
+            )
+
+        return AgentResult(
+            status="ok",
+            message="目前还没有可获取的处理结果，请先上传试卷并完成处理。",
+            task_id=current_task_id,
+            snapshot=self.memory_facade.build_agent_snapshot(chat_id),
+        )
+
+    def _handle_completed_task_link_query(
+            self,
+            chat_id: str,
+            current_task_id: str | None,
+    ) -> AgentResult:
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+        completed_results = self.delivery_service.get_completed_task_results_by_chat_id(chat_id)
+
+        if not completed_results:
+            return AgentResult(
+                status="ok",
+                message="我找到了已完成任务范围，但暂时没有查到对应的交付链接记录。",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        if len(completed_results) == 1:
+            item = completed_results[0]
+            return AgentResult(
+                status="ok",
+                message=(
+                    "我找到了 1 个已完成任务的访问链接：\n\n"
+                    f"📁 交付文件夹：{item['package_name']}\n"
+                    f"🔗 访问链接：{item['remote_url']}"
+                ),
+                task_id=item["task_id"],
+                snapshot=snapshot,
+            )
+
+        lines = [f"我找到了 {len(completed_results)} 个已完成任务的访问链接：", ""]
+        for idx, item in enumerate(completed_results, start=1):
+            lines.extend(
+                [
+                    f"{idx}. {item['package_name']}",
+                    f"   访问链接：{item['remote_url']}",
+                    "",
+                ]
+            )
+
+        return AgentResult(
+            status="ok",
+            message="\n".join(lines).strip(),
+            task_id=current_task_id,
+            snapshot=snapshot,
+        )
+
+
+    def _handle_missing_materials_query(
+        self,
+        chat_id: str,
+        current_task_id: str | None,
+    ) -> AgentResult:
+        missing_tasks = self.memory_facade.list_missing_material_tasks(chat_id)
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        if not missing_tasks:
+            return AgentResult(
+                status="ok",
+                message="当前没有仍然缺材料的任务。",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        lines = [f"当前共有 {len(missing_tasks)} 个任务还缺材料：", ""]
+        for idx, item in enumerate(missing_tasks, start=1):
+            uploaded_text = "、".join(item["uploaded_parts"]) if item["uploaded_parts"] else "暂无"
+            missing_text = "、".join(item["missing_parts"]) if item["missing_parts"] else "无"
+
+            lines.extend(
+                [
+                    f"{idx}️⃣ {item['display_name']}",
+                    f"   - 已上传：{uploaded_text}",
+                    f"   - 缺少：{missing_text}",
+                    "",
+                ]
+            )
+
+        lines.append("请上传对应缺失材料后，我即可继续处理。")
+
+        return AgentResult(
+            status="ok",
+            message="\n".join(lines),
+            task_id=current_task_id,
+            snapshot=snapshot,
+        )
+
+    def _handle_restart_current_task(
+        self,
+        chat_id: str,
+        current_task_id: str | None,
+    ) -> AgentResult:
+        if current_task_id:
+            self.task_service.mark_cancelled(current_task_id)
+
+        self.chat_session_service.unbind_task(chat_id)
+        self.chat_session_service.clear_waiting_for(chat_id)
+
+        new_task = self.task_service.create_task(
+            chat_id=chat_id,
+            created_by="agent",
+        )
+        new_task_id = new_task["task_id"]
+
+        self.chat_session_service.bind_task(
+            chat_id=chat_id,
+            task_id=new_task_id,
+        )
+        self.chat_session_service.set_waiting_for(
+            chat_id,
+            "materials_upload",
+        )
+        self.chat_session_service.update_summary_memory(
+            chat_id=chat_id,
+            summary_memory=f"已重新开始并创建新任务 {new_task_id}，等待上传材料",
+        )
+
+        created_task = self.task_service.get_task(new_task_id)
+        latest_session = self.chat_session_service.get_session(chat_id)
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        if not created_task:
+            return AgentResult(
+                status="failed",
+                message="重新开始失败：新任务创建后未能查询到任务记录，请检查数据库写入情况。",
+                task_id=None,
+                snapshot=snapshot,
+            )
+
+        if not latest_session:
+            return AgentResult(
+                status="failed",
+                message="重新开始失败：新任务已创建，但未能读取当前会话信息。",
+                task_id=new_task_id,
+                snapshot=snapshot,
+            )
+
+        if latest_session.get("current_task_id") != new_task_id:
+            return AgentResult(
+                status="failed",
+                message=(
+                    "重新开始失败：新任务已创建，但当前会话未正确绑定到新任务。"
+                    f"新任务ID：{new_task_id}"
+                ),
+                task_id=new_task_id,
+                snapshot=snapshot,
+            )
+
+        if latest_session.get("waiting_for") != "materials_upload":
+            return AgentResult(
+                status="failed",
+                message=(
+                    "重新开始失败：新任务已创建，但当前会话未进入材料上传等待状态。"
+                    f"新任务ID：{new_task_id}"
+                ),
+                task_id=new_task_id,
+                snapshot=snapshot,
+            )
+
+        return AgentResult(
+            status="ok",
+            message=(
+                "好的，已经从头重新开始。\n\n"
+                "我已为你创建一个新的空任务，请重新上传以下材料：\n"
+                "- 空白试卷 PDF\n"
+                "- 答案解析 PDF\n\n"
+                "你可以一次上传一个，也可以两个一起上传。"
+            ),
+            task_id=new_task_id,
+            snapshot=snapshot,
+        )
+
+    def _resolve_task_for_file_upload(
+        self,
+        chat_id: str,
+        current_task_id: str | None,
+        bound_task: dict | None,
+        latest_uploaded_file_name: str | None,
+    ) -> tuple[str, str | None]:
+        if not current_task_id or not bound_task:
+            new_task = self.task_service.create_task(
+                chat_id=chat_id,
+                created_by="agent",
+            )
+            new_task_id = new_task["task_id"]
+
+            self.chat_session_service.bind_task(
+                chat_id=chat_id,
+                task_id=new_task_id,
+            )
+            self.chat_session_service.set_waiting_for(
+                chat_id,
+                "materials_upload",
+            )
+            self.chat_session_service.update_summary_memory(
+                chat_id=chat_id,
+                summary_memory=f"已自动创建任务 {new_task_id} 并接收新上传材料",
+            )
+
+            return new_task_id, None
+
+        current_stage = bound_task.get("current_stage")
+        current_status = bound_task.get("status")
+
+        if current_stage in self.MATERIAL_EDITABLE_STAGES:
+            return current_task_id, None
+
+        if current_stage in self.NEW_TASK_ON_UPLOAD_STAGES or current_status in self.TERMINAL_STATUSES:
+            new_task = self.task_service.create_task(
+                chat_id=chat_id,
+                created_by="agent",
+            )
+            new_task_id = new_task["task_id"]
+
+            self.chat_session_service.bind_task(
+                chat_id=chat_id,
+                task_id=new_task_id,
+            )
+            self.chat_session_service.set_waiting_for(
+                chat_id,
+                "materials_upload",
+            )
+
+            reason_text = "当前任务状态不适合继续补充材料"
+            if current_stage == TaskState.PROCESSING.value:
+                reason_text = "检测到当前任务正在处理中"
+            elif current_stage == TaskState.DELIVERING.value:
+                reason_text = "检测到当前任务正在上传交付结果"
+            elif current_stage == TaskState.COMPLETED.value or current_status == TaskState.COMPLETED.value:
+                reason_text = "检测到当前任务已经完成"
+            elif current_stage == TaskState.FAILED.value or current_status == TaskState.FAILED.value:
+                reason_text = "检测到当前任务已经失败"
+            elif current_stage == TaskState.CANCELLED.value or current_status == TaskState.CANCELLED.value:
+                reason_text = "检测到当前任务已经取消"
+
+            self.chat_session_service.update_summary_memory(
+                chat_id=chat_id,
+                summary_memory=f"{reason_text}，已自动创建新任务 {new_task_id} 来接收本次上传材料",
+            )
+
+            switched_name = latest_uploaded_file_name or self._get_task_display_name(new_task_id)
+            handoff_message = (
+                f"ℹ️ {reason_text}，我会把这次新上传的文件作为一个新任务来处理。\n"
+                f"👉 当前任务已切换为：{switched_name}"
+            )
+
+            return new_task_id, handoff_message
+
+        new_task = self.task_service.create_task(
+            chat_id=chat_id,
+            created_by="agent",
+        )
+        new_task_id = new_task["task_id"]
+
+        self.chat_session_service.bind_task(
+            chat_id=chat_id,
+            task_id=new_task_id,
+        )
+        self.chat_session_service.set_waiting_for(
+            chat_id,
+            "materials_upload",
+        )
+        self.chat_session_service.update_summary_memory(
+            chat_id=chat_id,
+            summary_memory=f"检测到未知任务阶段，已自动创建新任务 {new_task_id} 来接收本次上传材料",
+        )
+
+        switched_name = latest_uploaded_file_name or self._get_task_display_name(new_task_id)
+        return new_task_id, f"ℹ️ 检测到当前任务状态异常，我会把这次新上传的文件作为一个新任务来处理。\n👉 当前任务已切换为：{switched_name}"
+
     def handle_event(
         self,
         event: AgentEvent,
@@ -100,23 +787,108 @@ class AgentOrchestrator:
             )
 
         current_task_id = session.get("current_task_id")
+        bound_task = self.task_service.get_task(current_task_id) if current_task_id else None
 
-        # 如果 session 绑定的是终态任务，则先解绑
-        if current_task_id:
-            bound_task = self.task_service.get_task(current_task_id)
-
-            if bound_task and bound_task.get("status") in ["completed", "failed"]:
-                self.chat_session_service.bind_task(
-                    chat_id=event.chat_id,
-                    task_id=None,
-                )
+        if event.event_type != "file_upload" and current_task_id and bound_task:
+            if bound_task.get("status") in self.TERMINAL_STATUSES:
+                self.chat_session_service.unbind_task(event.chat_id)
                 self.chat_session_service.update_summary_memory(
                     chat_id=event.chat_id,
                     summary_memory=f"已将终态任务 {current_task_id} 归档为历史任务，准备进入新任务会话",
                 )
 
                 current_task_id = None
+                bound_task = None
                 session = self.chat_session_service.get_session(event.chat_id) or session
+
+        if event.event_type == "text":
+            if self._is_cancel_empty_tasks_message(event.user_message):
+                return self._handle_cancel_empty_tasks(
+                    chat_id=event.chat_id,
+                    current_task_id=current_task_id,
+                )
+
+            if self._is_cancel_missing_tasks_message(event.user_message):
+                return self._handle_cancel_missing_tasks(
+                    chat_id=event.chat_id,
+                    current_task_id=current_task_id,
+                )
+
+            if self._is_cancel_message(event.user_message):
+                return self._handle_cancel_current_task(
+                    chat_id=event.chat_id,
+                    task_id=current_task_id,
+                )
+
+            if self._is_restart_message(event.user_message):
+                return self._handle_restart_current_task(
+                    chat_id=event.chat_id,
+                    current_task_id=current_task_id,
+                )
+
+            if self._is_current_task_result_query(event.user_message):
+                return self._handle_current_task_result_query(
+                    chat_id=event.chat_id,
+                    current_task_id=current_task_id,
+                )
+
+            if self._is_completed_task_link_query(event.user_message):
+                return self._handle_completed_task_link_query(
+                    chat_id=event.chat_id,
+                    current_task_id=current_task_id,
+                )
+
+            if self._is_missing_materials_query(event.user_message):
+                return self._handle_missing_materials_query(
+                    chat_id=event.chat_id,
+                    current_task_id=current_task_id,
+                )
+
+            if self._is_result_query(event.user_message):
+                return self._handle_result_query(
+                    chat_id=event.chat_id,
+                    current_task_id=current_task_id,
+                )
+
+        if event.event_type == "file_upload" and event.files:
+            target_task_id, handoff_message = self._resolve_task_for_file_upload(
+                chat_id=event.chat_id,
+                current_task_id=current_task_id,
+                bound_task=bound_task,
+                latest_uploaded_file_name=event.files[-1].file_name if event.files else None,
+            )
+
+            if handoff_message:
+                self.feishu_message_sender.send_text(
+                    event.chat_id,
+                    handoff_message,
+                )
+
+            tool_call = ToolCall(
+                tool_name="ingest_materials",
+                tool_args={
+                    "task_id": target_task_id,
+                    "files": [
+                        {
+                            "file_name": item.file_name,
+                            "file_key": item.file_key,
+                            "mime_type": item.mime_type,
+                            "message_id": item.message_id,
+                        }
+                        for item in event.files
+                    ],
+                },
+            )
+
+            tool_result = self.tool_executor.execute(tool_call)
+            snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
+
+            return AgentResult(
+                status="ok" if tool_result.success else "failed",
+                message=tool_result.message,
+                task_id=target_task_id,
+                snapshot=snapshot,
+            )
 
         if not current_task_id:
             task = self.task_service.create_task(
@@ -138,35 +910,6 @@ class AgentOrchestrator:
         snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
         current_stage = snapshot.get("current_stage")
 
-        # 1. 文件上传事件优先直走 ingest_materials
-        if event.event_type == "file_upload" and event.files:
-            tool_call = ToolCall(
-                tool_name="ingest_materials",
-                tool_args={
-                    "task_id": current_task_id,
-                    "files": [
-                        {
-                            "file_name": item.file_name,
-                            "file_key": item.file_key,
-                            "mime_type": item.mime_type,
-                            "message_id": item.message_id,
-                        }
-                        for item in event.files
-                    ],
-                },
-            )
-
-            tool_result = self.tool_executor.execute(tool_call)
-            snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
-
-            return AgentResult(
-                status="ok" if tool_result.success else "failed",
-                message=tool_result.message,
-                task_id=current_task_id,
-                snapshot=snapshot,
-            )
-
-        # 2. waiting_confirmation 阶段优先处理“确认 / 驳回”
         if (
             current_stage == TaskState.WAITING_CONFIRMATION.value
             and event.event_type == "text"
@@ -174,15 +917,17 @@ class AgentOrchestrator:
             if self.confirmation_policy.is_confirm_message(event.user_message):
                 self.feishu_message_sender.send_text(
                     event.chat_id,
-                    "✅ 已确认材料，开始处理试卷。\n\n"
-                    "我会依次完成：\n"
-                    "- 试卷结构解析与切题\n"
-                    "- 答案与知识点提取\n"
-                    "- 结果整理并上传\n\n"
-                    "请稍候，处理中..."
+                    self._with_task_prefix(
+                        current_task_id,
+                        "✅ 已确认材料，开始处理试卷。\n\n"
+                        "我会依次完成：\n"
+                        "- 试卷结构解析与切题\n"
+                        "- 答案与知识点提取\n"
+                        "- 结果整理并上传\n\n"
+                        "请稍候，处理中..."
+                    ),
                 )
 
-                # 先推进到 processing
                 stage_tool_call = ToolCall(
                     tool_name="manage_task",
                     tool_args={
@@ -209,9 +954,9 @@ class AgentOrchestrator:
                     summary_memory=f"用户已确认材料，任务 {current_task_id} 已进入 processing",
                 )
 
-                # ========= Step A: process_paper =========
-                self.feishu_message_sender.send_text(
+                self._send_task_text(
                     event.chat_id,
+                    current_task_id,
                     "🔄 当前正在解析试卷结构并切题......",
                 )
 
@@ -241,9 +986,9 @@ class AgentOrchestrator:
                 cleaned_output_root = process_result.data.get("cleaned_output_root")
                 blank_pdf_path = process_result.data.get("blank_pdf_path")
 
-                # ========= Step B: build_manifest =========
-                self.feishu_message_sender.send_text(
+                self._send_task_text(
                     event.chat_id,
+                    current_task_id,
                     "🔄 试卷结构解析已完成！当前正在提取答案与知识点，用于填写 Excel 表格 (耗时1-2分钟，请耐心等待) ......",
                 )
 
@@ -272,9 +1017,9 @@ class AgentOrchestrator:
 
                 manifest_path = manifest_result.data.get("manifest_path", manifest_path)
 
-                # ========= Step C: write_excel =========
-                self.feishu_message_sender.send_text(
+                self._send_task_text(
                     event.chat_id,
+                    current_task_id,
                     "🔄 答案与知识点解析已完成！当前正在填写 Excel 表格 (tags.xlsx)......",
                 )
 
@@ -304,9 +1049,9 @@ class AgentOrchestrator:
 
                 excel_path = excel_result.data.get("excel_path", excel_path)
 
-                # ========= Step D: package_results =========
-                self.feishu_message_sender.send_text(
+                self._send_task_text(
                     event.chat_id,
+                    current_task_id,
                     "🔄 Excel 表格已填写完成！当前正在打包所有资料......",
                 )
 
@@ -346,9 +1091,9 @@ class AgentOrchestrator:
                         snapshot=snapshot,
                     )
 
-                # ========= Step E: deliver_results =========
-                self.feishu_message_sender.send_text(
+                self._send_task_text(
                     event.chat_id,
+                    current_task_id,
                     "🔄 所有材料均已打包完成！当前正在上传到飞书云盘文件夹......",
                 )
 
@@ -383,8 +1128,10 @@ class AgentOrchestrator:
                     summary_memory=f"任务 {current_task_id} 已完成完整处理链并上传飞书",
                 )
 
-
-                finish_text_parts = ["🎉 处理完成！", ""]
+                finish_text_parts = [
+                    self._with_task_prefix(current_task_id, "🎉 处理完成！"),
+                    "",
+                ]
 
                 if package_name:
                     finish_text_parts.extend([
@@ -419,7 +1166,7 @@ class AgentOrchestrator:
                     "\n".join(finish_text_parts),
                 )
 
-                result_message = "处理完成，结果已上传。"
+                result_message = self._with_task_prefix(current_task_id, "处理完成，结果已上传。")
 
                 if package_name:
                     result_message += f"\n交付文件夹：{package_name}"
@@ -459,12 +1206,11 @@ class AgentOrchestrator:
 
                 return AgentResult(
                     status="ok" if tool_result.success else "failed",
-                    message="好的，请重新上传或补充正确的 blank_pdf / solution_pdf。",
+                    message="好的，请重新上传或补充正确的 空白试卷文件 / 解析试卷文件。",
                     task_id=current_task_id,
                     snapshot=snapshot,
                 )
 
-            # 非确认/驳回文本：进入 planner
             snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
             return self._run_planner_flow(
                 event=event,
@@ -472,7 +1218,6 @@ class AgentOrchestrator:
                 task_id=current_task_id,
             )
 
-        # 3. collecting_materials 阶段：文本进入 planner；其他事件兜底
         if current_stage == TaskState.COLLECTING_MATERIALS.value:
             if event.event_type == "text":
                 snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
@@ -484,12 +1229,11 @@ class AgentOrchestrator:
 
             return AgentResult(
                 status="ok",
-                message="请上传 blank_pdf 和 solution_pdf，我会继续处理。支持一次上传一个，也支持一次上传多个文件。",
+                message="请上传空白试卷 PDF 和答案解析 PDF，我会继续处理。支持一次上传一个，也支持一次上传多个文件。",
                 task_id=current_task_id,
                 snapshot=snapshot,
             )
 
-        # 4. processing 阶段：文本进入 planner；非文本事件保留原状态说明
         if current_stage == TaskState.PROCESSING.value:
             if event.event_type == "text":
                 snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
@@ -503,7 +1247,7 @@ class AgentOrchestrator:
             processing_summary = task_memory.get("processing_summary") or "当前任务正在处理中。"
             next_action_hint = task_memory.get("next_action_hint") or ""
 
-            status_text = processing_summary
+            status_text = self._with_task_prefix(current_task_id, processing_summary)
             if next_action_hint:
                 status_text += f"\n下一步：{next_action_hint}"
 
@@ -514,7 +1258,6 @@ class AgentOrchestrator:
                 snapshot=snapshot,
             )
 
-        # 5. 其他阶段交给 planner
         snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
         return self._run_planner_flow(
             event=event,

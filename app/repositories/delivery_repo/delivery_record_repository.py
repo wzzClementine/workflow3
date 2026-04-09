@@ -70,7 +70,40 @@ class DeliveryRecordRepository:
             SELECT *
             FROM delivery_records
             WHERE task_id = ?
-            ORDER BY id DESC
+            ORDER BY delivered_at DESC
             """,
             (task_id,),
+        )
+
+    # ✅ 新增：获取某个 task 最新成功交付
+    def get_latest_success_by_task_id(self, task_id: str) -> dict[str, Any] | None:
+        return self.sqlite_manager.fetch_one(
+            """
+            SELECT *
+            FROM delivery_records
+            WHERE task_id = ?
+              AND delivery_status = 'success'
+            ORDER BY delivered_at DESC
+            LIMIT 1
+            """,
+            (task_id,),
+        )
+
+    # ✅ 新增：获取多个 task 中最新成功交付（用于历史任务）
+    def get_latest_success_by_task_ids(self, task_ids: list[str]) -> dict[str, Any] | None:
+        if not task_ids:
+            return None
+
+        placeholders = ",".join(["?"] * len(task_ids))
+
+        return self.sqlite_manager.fetch_one(
+            f"""
+            SELECT *
+            FROM delivery_records
+            WHERE task_id IN ({placeholders})
+              AND delivery_status = 'success'
+            ORDER BY delivered_at DESC
+            LIMIT 1
+            """,
+            tuple(task_ids),
         )

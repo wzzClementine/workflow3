@@ -93,10 +93,6 @@ class DeliveryService:
         }
 
     def get_results_by_task_ids(self, task_ids: list[str]) -> list[dict[str, Any]]:
-        """
-        批量查询一组 task 对应的最新成功交付链接。
-        只返回查到成功交付记录的任务，保持输入 task_ids 的顺序。
-        """
         results: list[dict[str, Any]] = []
 
         for task_id in task_ids:
@@ -115,10 +111,6 @@ class DeliveryService:
         return results
 
     def get_completed_task_results_by_chat_id(self, chat_id: str) -> list[dict[str, Any]]:
-        """
-        查询当前 chat 下所有已完成任务的交付链接。
-        只返回真正能查到成功 delivery 记录的任务。
-        """
         tasks = self.task_repository.list_by_chat_id(chat_id)
         if not tasks:
             return []
@@ -132,3 +124,32 @@ class DeliveryService:
             return []
 
         return self.get_results_by_task_ids(completed_task_ids)
+
+    def get_latest_delivery_record_by_task_id(self, task_id: str) -> dict[str, Any] | None:
+        """
+        返回某个任务最近一次成功交付的完整记录。
+        这里保留 local_package_path，供“重新上传结果”使用。
+        """
+        return self.delivery_record_repository.get_latest_success_by_task_id(task_id)
+
+    def get_latest_completed_delivery_record_by_chat_id(self, chat_id: str) -> dict[str, Any] | None:
+        """
+        返回当前 chat 下最近一个已完成任务的最近成功交付记录。
+        供“把最近完成的任务重新上传”使用。
+        """
+        tasks = self.task_repository.list_by_chat_id(chat_id)
+        if not tasks:
+            return None
+
+        for task in tasks:
+            task_id = task.get("task_id")
+            if not task_id:
+                continue
+            if task.get("status") != "completed":
+                continue
+
+            record = self.delivery_record_repository.get_latest_success_by_task_id(task_id)
+            if record:
+                return record
+
+        return None

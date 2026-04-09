@@ -117,6 +117,42 @@ class AgentOrchestrator:
         "我要已完成任务的链接",
     }
 
+    CURRENT_TASK_RERUN_EXCEL_KEYWORDS = {
+        "当前任务只重新生成excel",
+        "当前任务重新生成excel",
+        "当前任务重跑excel",
+        "当前任务只重跑excel",
+        "当前任务重新做excel",
+        "当前任务重新生成 Excel",
+        "当前任务重跑 Excel",
+        "当前任务只重跑 Excel",
+        "当前任务重新做 Excel",
+        "当前任务只重新生成 Excel",
+    }
+
+    CURRENT_TASK_REPACKAGE_KEYWORDS = {
+        "当前任务只重新打包",
+        "当前任务重新打包",
+        "当前任务重跑打包",
+        "当前任务重新打包一下",
+    }
+
+    CURRENT_TASK_REDELIVER_KEYWORDS = {
+        "当前任务只重新上传结果",
+        "当前任务重新上传结果",
+        "当前任务重新上传",
+        "当前任务重跑上传",
+        "当前任务重新上传到飞书",
+    }
+
+    LATEST_COMPLETED_REDELIVER_KEYWORDS = {
+        "把最近完成的任务重新上传",
+        "把刚才完成的那个任务重新上传",
+        "最近一次已完成任务重新上传结果",
+        "最近完成任务重新上传",
+        "把最近完成的任务重新上传结果",
+    }
+
     TERMINAL_STATUSES = {
         TaskState.COMPLETED.value,
         TaskState.FAILED.value,
@@ -173,6 +209,30 @@ class AgentOrchestrator:
             chat_id,
             self._with_task_prefix(task_id, text),
         )
+
+    def _get_task_root(self, task_id: str) -> Path:
+        return Path(settings.tasks_dir) / task_id
+
+    def _get_task_artifact_paths(self, task_id: str) -> dict[str, Path]:
+        task_root = self._get_task_root(task_id)
+
+        return {
+            "task_root": task_root,
+            "manifest_path": task_root / "manifest" / "manifest.json",
+            "excel_path": task_root / "excel" / f"{task_id}.xlsx",
+            "question_dir": task_root / "question_images",
+            "analysis_dir": task_root / "analysis_images",
+            "cleaned_analysis_dir": task_root / "cleaned_analysis_images",
+        }
+
+    def _require_path(
+            self,
+            path: Path,
+            error_message: str,
+    ) -> str | None:
+        if not path.exists():
+            return error_message
+        return None
 
     def _run_planner_flow(
         self,
@@ -261,6 +321,30 @@ class AgentOrchestrator:
             return False
         normalized = text.strip().lower()
         return any(keyword in normalized for keyword in self.COMPLETED_TASK_LINK_QUERY_KEYWORDS)
+
+    def _is_current_task_rerun_excel_query(self, text: str | None) -> bool:
+        if not text:
+            return False
+        normalized = text.strip().lower()
+        return any(keyword in normalized for keyword in self.CURRENT_TASK_RERUN_EXCEL_KEYWORDS)
+
+    def _is_current_task_repackage_query(self, text: str | None) -> bool:
+        if not text:
+            return False
+        normalized = text.strip().lower()
+        return any(keyword in normalized for keyword in self.CURRENT_TASK_REPACKAGE_KEYWORDS)
+
+    def _is_current_task_redeliver_query(self, text: str | None) -> bool:
+        if not text:
+            return False
+        normalized = text.strip().lower()
+        return any(keyword in normalized for keyword in self.CURRENT_TASK_REDELIVER_KEYWORDS)
+
+    def _is_latest_completed_redeliver_query(self, text: str | None) -> bool:
+        if not text:
+            return False
+        normalized = text.strip().lower()
+        return any(keyword in normalized for keyword in self.LATEST_COMPLETED_REDELIVER_KEYWORDS)
 
     def _handle_cancel_current_task(
         self,
@@ -489,6 +573,339 @@ class AgentOrchestrator:
             message="目前还没有可获取的处理结果，请先上传试卷并完成处理。",
             task_id=current_task_id,
             snapshot=self.memory_facade.build_agent_snapshot(chat_id),
+        )
+
+    def _handle_current_task_rerun_excel(
+            self,
+            chat_id: str,
+            current_task_id: str | None,
+    ) -> AgentResult:
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        if not current_task_id:
+            record = self.delivery_service.get_latest_completed_delivery_record_by_chat_id(chat_id)
+            if not record:
+                return AgentResult(
+                    status="ok",
+                    message="当前没有可用于重跑 Excel 的任务。",
+                    task_id=None,
+                    snapshot=snapshot,
+                )
+            current_task_id = record.get("task_id")
+
+            if current_task_id:
+                self.chat_session_service.bind_task(
+                    chat_id=chat_id,
+                    task_id=current_task_id,
+                )
+                self.chat_session_service.clear_waiting_for(chat_id)
+                self.chat_session_service.update_summary_memory(
+                    chat_id=chat_id,
+                    summary_memory=f"已将当前会话上下文切换到最近一次已完成任务 {current_task_id}，用于执行 Excel 单项重跑",
+                )
+                snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        paths = self._get_task_artifact_paths(current_task_id)
+
+        err = self._require_path(
+            paths["manifest_path"],
+            "无法只重跑 Excel，因为当前任务缺少 manifest.json。请先完整重跑上游步骤。",
+        )
+        if err:
+            return AgentResult(
+                status="ok",
+                message=err,
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        tool_call = ToolCall(
+            tool_name="write_excel",
+            tool_args={
+                "task_id": current_task_id,
+                "manifest_path": str(paths["manifest_path"]),
+                "output_path": str(paths["excel_path"]),
+                "school": "",
+                "year": "",
+                "paper_note": "",
+            },
+        )
+
+        tool_result = self.tool_executor.execute(tool_call)
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        if not tool_result.success:
+            return AgentResult(
+                status="failed",
+                message=f"重跑 Excel 失败：{tool_result.message}",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        return AgentResult(
+            status="ok",
+            message=self._with_task_prefix(
+                current_task_id,
+                "已完成 Excel 重跑。我已基于当前任务已有的 manifest 重新生成 Excel 文件。",
+            ),
+            task_id=current_task_id,
+            snapshot=snapshot,
+        )
+
+    def _handle_current_task_repackage(
+            self,
+            chat_id: str,
+            current_task_id: str | None,
+    ) -> AgentResult:
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        if not current_task_id:
+            record = self.delivery_service.get_latest_completed_delivery_record_by_chat_id(chat_id)
+            if not record:
+                return AgentResult(
+                    status="ok",
+                    message="当前没有可用于重新打包的任务。",
+                    task_id=None,
+                    snapshot=snapshot,
+                )
+            current_task_id = record.get("task_id")
+
+            if current_task_id:
+                self.chat_session_service.bind_task(
+                    chat_id=chat_id,
+                    task_id=current_task_id,
+                )
+                self.chat_session_service.clear_waiting_for(chat_id)
+                self.chat_session_service.update_summary_memory(
+                    chat_id=chat_id,
+                    summary_memory=f"已将当前会话上下文切换到最近一次已完成任务 {current_task_id}，用于执行重新打包",
+                )
+                snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        paths = self._get_task_artifact_paths(current_task_id)
+
+        checks = [
+            self._require_path(
+                paths["manifest_path"],
+                "无法只重新打包，因为当前任务缺少 manifest.json。"
+            ),
+            self._require_path(
+                paths["excel_path"],
+                "无法只重新打包，因为当前任务缺少 Excel 文件。请先重跑 Excel 或完整处理。"
+            ),
+            self._require_path(
+                paths["question_dir"],
+                "无法只重新打包，因为当前任务缺少 question_images 目录。"
+            ),
+            self._require_path(
+                paths["analysis_dir"],
+                "无法只重新打包，因为当前任务缺少 analysis_images 目录。"
+            ),
+            self._require_path(
+                paths["cleaned_analysis_dir"],
+                "无法只重新打包，因为当前任务缺少 cleaned_analysis_images 目录。"
+            ),
+        ]
+
+        for err in checks:
+            if err:
+                return AgentResult(
+                    status="ok",
+                    message=err,
+                    task_id=current_task_id,
+                    snapshot=snapshot,
+                )
+
+        blank_pdf_path = (
+                             (snapshot.get("current_task_summary") or {})
+                             .get("latest_materials_summary", {})
+                             .get("blank_pdf_local_path")
+                         ) or ""
+
+        tool_call = ToolCall(
+            tool_name="package_results",
+            tool_args={
+                "task_id": current_task_id,
+                "task_root": str(settings.tasks_dir),
+                "excel_path": str(paths["excel_path"]),
+                "question_dir": str(paths["question_dir"]),
+                "analysis_dir": str(paths["analysis_dir"]),
+                "cleaned_analysis_dir": str(paths["cleaned_analysis_dir"]),
+                "manifest_path": str(paths["manifest_path"]),
+                "source_pdf_path": blank_pdf_path,
+            },
+        )
+
+        tool_result = self.tool_executor.execute(tool_call)
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        if not tool_result.success:
+            return AgentResult(
+                status="failed",
+                message=f"重新打包失败：{tool_result.message}",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        return AgentResult(
+            status="ok",
+            message=self._with_task_prefix(
+                current_task_id,
+                "已完成重新打包。我复用了当前任务已有的结构化结果和图片目录。",
+            ),
+            task_id=current_task_id,
+            snapshot=snapshot,
+        )
+
+    def _handle_current_task_redeliver(
+            self,
+            chat_id: str,
+            current_task_id: str | None,
+    ) -> AgentResult:
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        if not current_task_id:
+            record = self.delivery_service.get_latest_completed_delivery_record_by_chat_id(chat_id)
+            if not record:
+                return AgentResult(
+                    status="ok",
+                    message="当前没有可用于重新上传的任务。",
+                    task_id=None,
+                    snapshot=snapshot,
+                )
+            current_task_id = record.get("task_id")
+
+            if current_task_id:
+                self.chat_session_service.bind_task(
+                    chat_id=chat_id,
+                    task_id=current_task_id,
+                )
+                self.chat_session_service.clear_waiting_for(chat_id)
+                self.chat_session_service.update_summary_memory(
+                    chat_id=chat_id,
+                    summary_memory=f"已将当前会话上下文切换到最近一次已完成任务 {current_task_id}，用于执行重新上传结果",
+                )
+                snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        record = self.delivery_service.get_latest_delivery_record_by_task_id(current_task_id)
+        if not record:
+            return AgentResult(
+                status="ok",
+                message="当前任务还没有可复用的打包结果，无法只重新上传。请先完成打包或完整处理。",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        local_package_path = record.get("local_package_path")
+        if not local_package_path or not Path(local_package_path).exists():
+            return AgentResult(
+                status="ok",
+                message="当前任务缺少可用的本地打包目录，无法只重新上传结果。",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        tool_call = ToolCall(
+            tool_name="deliver_results",
+            tool_args={
+                "task_id": current_task_id,
+                "local_package_path": local_package_path,
+            },
+        )
+
+        tool_result = self.tool_executor.execute(tool_call)
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        if not tool_result.success:
+            return AgentResult(
+                status="failed",
+                message=f"重新上传失败：{tool_result.message}",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        remote_url = (
+                (tool_result.data.get("record", {}) or {}).get("remote_url")
+                or (tool_result.data.get("upload_result", {}) or {}).get("root_folder_url", "")
+        )
+
+        message = self._with_task_prefix(
+            current_task_id,
+            "已完成重新上传。",
+        )
+        if remote_url:
+            message += f"\n访问链接：{remote_url}"
+
+        return AgentResult(
+            status="ok",
+            message=message,
+            task_id=current_task_id,
+            snapshot=snapshot,
+        )
+
+    def _handle_latest_completed_task_redeliver(
+            self,
+            chat_id: str,
+            current_task_id: str | None,
+    ) -> AgentResult:
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        record = self.delivery_service.get_latest_completed_delivery_record_by_chat_id(chat_id)
+        if not record:
+            return AgentResult(
+                status="ok",
+                message="当前没有可用于重新上传的已完成任务记录。",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        target_task_id = record.get("task_id")
+        local_package_path = record.get("local_package_path")
+
+        if not target_task_id or not local_package_path or not Path(local_package_path).exists():
+            return AgentResult(
+                status="ok",
+                message="最近一次已完成任务缺少可用的本地打包目录，无法重新上传。",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        tool_call = ToolCall(
+            tool_name="deliver_results",
+            tool_args={
+                "task_id": target_task_id,
+                "local_package_path": local_package_path,
+            },
+        )
+
+        tool_result = self.tool_executor.execute(tool_call)
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        if not tool_result.success:
+            return AgentResult(
+                status="failed",
+                message=f"最近一次已完成任务重新上传失败：{tool_result.message}",
+                task_id=target_task_id,
+                snapshot=snapshot,
+            )
+
+        remote_url = (
+                (tool_result.data.get("record", {}) or {}).get("remote_url")
+                or (tool_result.data.get("upload_result", {}) or {}).get("root_folder_url", "")
+        )
+
+        message = self._with_task_prefix(
+            target_task_id,
+            "已完成重新上传。我已基于最近一次已完成任务的现有打包目录重新上传结果。",
+        )
+        if remote_url:
+            message += f"\n访问链接：{remote_url}"
+
+        return AgentResult(
+            status="ok",
+            message=message,
+            task_id=target_task_id,
+            snapshot=snapshot,
         )
 
     def _handle_completed_task_link_query(
@@ -789,17 +1206,13 @@ class AgentOrchestrator:
         current_task_id = session.get("current_task_id")
         bound_task = self.task_service.get_task(current_task_id) if current_task_id else None
 
-        if event.event_type != "file_upload" and current_task_id and bound_task:
-            if bound_task.get("status") in self.TERMINAL_STATUSES:
-                self.chat_session_service.unbind_task(event.chat_id)
-                self.chat_session_service.update_summary_memory(
-                    chat_id=event.chat_id,
-                    summary_memory=f"已将终态任务 {current_task_id} 归档为历史任务，准备进入新任务会话",
-                )
-
-                current_task_id = None
-                bound_task = None
-                session = self.chat_session_service.get_session(event.chat_id) or session
+        # 重要：
+        # 不再因为普通文本消息就自动解绑 completed / failed / cancelled 任务。
+        # 这样当用户刚刚通过“单项重跑”把上下文切到最近一次已完成任务后，
+        # 后续继续问“当前任务是哪个 / 当前任务只重新上传结果 / 当前任务只重新打包”
+        # 都还能沿用同一个 task 上下文。
+        #
+        # 是否切换到新任务，只在文件上传时由 _resolve_task_for_file_upload() 决定。
 
         if event.event_type == "text":
             if self._is_cancel_empty_tasks_message(event.user_message):
@@ -826,14 +1239,32 @@ class AgentOrchestrator:
                     current_task_id=current_task_id,
                 )
 
-            if self._is_current_task_result_query(event.user_message):
-                return self._handle_current_task_result_query(
+            if self._is_current_task_rerun_excel_query(event.user_message):
+                return self._handle_current_task_rerun_excel(
                     chat_id=event.chat_id,
                     current_task_id=current_task_id,
                 )
 
-            if self._is_completed_task_link_query(event.user_message):
-                return self._handle_completed_task_link_query(
+            if self._is_current_task_repackage_query(event.user_message):
+                return self._handle_current_task_repackage(
+                    chat_id=event.chat_id,
+                    current_task_id=current_task_id,
+                )
+
+            if self._is_current_task_redeliver_query(event.user_message):
+                return self._handle_current_task_redeliver(
+                    chat_id=event.chat_id,
+                    current_task_id=current_task_id,
+                )
+
+            if self._is_latest_completed_redeliver_query(event.user_message):
+                return self._handle_latest_completed_task_redeliver(
+                    chat_id=event.chat_id,
+                    current_task_id=current_task_id,
+                )
+
+            if self._is_current_task_result_query(event.user_message):
+                return self._handle_current_task_result_query(
                     chat_id=event.chat_id,
                     current_task_id=current_task_id,
                 )
@@ -890,7 +1321,7 @@ class AgentOrchestrator:
                 snapshot=snapshot,
             )
 
-        if not current_task_id:
+        if not current_task_id and event.event_type == "file_upload":
             task = self.task_service.create_task(
                 chat_id=event.chat_id,
                 created_by="agent",

@@ -128,6 +128,8 @@ class AgentOrchestrator:
         "当前任务只重跑 Excel",
         "当前任务重新做 Excel",
         "当前任务只重新生成 Excel",
+        "重新生成Excel吧",
+        "重新生成Excel"
     }
 
     CURRENT_TASK_REPACKAGE_KEYWORDS = {
@@ -135,6 +137,8 @@ class AgentOrchestrator:
         "当前任务重新打包",
         "当前任务重跑打包",
         "当前任务重新打包一下",
+        "重新打包吧",
+        "重新打包"
     }
 
     CURRENT_TASK_REDELIVER_KEYWORDS = {
@@ -143,6 +147,8 @@ class AgentOrchestrator:
         "当前任务重新上传",
         "当前任务重跑上传",
         "当前任务重新上传到飞书",
+        "重新上传吧",
+        "重新上传"
     }
 
     LATEST_COMPLETED_REDELIVER_KEYWORDS = {
@@ -151,6 +157,69 @@ class AgentOrchestrator:
         "最近一次已完成任务重新上传结果",
         "最近完成任务重新上传",
         "把最近完成的任务重新上传结果",
+    }
+
+    CURRENT_TASK_RERUN_MANIFEST_KEYWORDS = {
+        "当前任务只重新生成manifest",
+        "当前任务重新生成manifest",
+        "当前任务重跑manifest",
+        "当前任务只重跑manifest",
+        "当前任务重新构建manifest",
+        "当前任务重新生成 manifest",
+        "当前任务重跑 manifest",
+        "当前任务只重跑 manifest",
+        "当前任务重新构建 manifest",
+        "当前任务重新生成清单",
+        "当前任务重建清单",
+        "重新生成manifest",
+        "重新生成manifest",
+        "重跑manifest",
+        "只重跑manifest",
+        "重新构建manifest",
+        "重新生成 manifest",
+        "重跑 manifest",
+        "只重跑 manifest",
+        "重新构建 manifest",
+        "重新生成清单",
+        "重建清单",
+    }
+
+    CURRENT_TASK_RERUN_EXTRACTION_KEYWORDS = {
+        "当前任务只重新提取答案和知识点",
+        "当前任务重新提取答案和知识点",
+        "当前任务重新识别答案和知识点",
+        "当前任务重跑答案和知识点",
+        "当前任务只重新提取答案",
+        "当前任务重新提取答案",
+        "当前任务重新提取知识点",
+        "当前任务重新识别答案",
+        "当前任务重新识别知识点",
+        "只重新提取答案和知识点",
+        "重新提取答案和知识点",
+        "重新识别答案和知识点",
+        "重跑答案和知识点",
+        "只重新提取答案",
+        "重新提取答案",
+        "重新提取知识点",
+        "重新识别答案",
+        "重新识别知识点",
+    }
+
+    CURRENT_TASK_RERUN_CUT_KEYWORDS = {
+        "当前任务重新切题",
+        "当前任务重跑切题",
+        "当前任务重新切图",
+        "当前任务重新解析试卷结构",
+        "当前任务重新解析结构",
+        "当前任务重新切题",
+        "当前任务重新切割题目",
+        "重新切题",
+        "重跑切题",
+        "重新切图",
+        "重新解析试卷结构",
+        "重新解析结构",
+        "重新切题",
+        "重新切割题目",
     }
 
     TERMINAL_STATUSES = {
@@ -233,6 +302,32 @@ class AgentOrchestrator:
         if not path.exists():
             return error_message
         return None
+
+    def _get_task_material_paths(self, task_id: str) -> tuple[str, str]:
+        task_root = self._get_task_root(task_id)
+        uploads_dir = task_root / "uploads"
+
+        if not uploads_dir.exists():
+            return "", ""
+
+        pdf_files = [p for p in uploads_dir.iterdir() if p.is_file() and p.suffix.lower() == ".pdf"]
+
+        blank_pdf_path = ""
+        solution_pdf_path = ""
+
+        for p in pdf_files:
+            name = p.name.lower()
+
+            # 解析 / 答案 / solution 视为解析PDF
+            if ("解析" in p.name) or ("answer" in name) or ("solution" in name):
+                if not solution_pdf_path:
+                    solution_pdf_path = str(p)
+            else:
+                # 其余 PDF 默认视为空白试卷 PDF
+                if not blank_pdf_path:
+                    blank_pdf_path = str(p)
+
+        return blank_pdf_path, solution_pdf_path
 
     def _run_planner_flow(
         self,
@@ -345,6 +440,24 @@ class AgentOrchestrator:
             return False
         normalized = text.strip().lower()
         return any(keyword in normalized for keyword in self.LATEST_COMPLETED_REDELIVER_KEYWORDS)
+
+    def _is_current_task_rerun_manifest_query(self, text: str | None) -> bool:
+        if not text:
+            return False
+        normalized = text.strip().lower()
+        return any(keyword in normalized for keyword in self.CURRENT_TASK_RERUN_MANIFEST_KEYWORDS)
+
+    def _is_current_task_rerun_extraction_query(self, text: str | None) -> bool:
+        if not text:
+            return False
+        normalized = text.strip().lower()
+        return any(keyword in normalized for keyword in self.CURRENT_TASK_RERUN_EXTRACTION_KEYWORDS)
+
+    def _is_current_task_rerun_cut_query(self, text: str | None) -> bool:
+        if not text:
+            return False
+        normalized = text.strip().lower()
+        return any(keyword in normalized for keyword in self.CURRENT_TASK_RERUN_CUT_KEYWORDS)
 
     def _handle_cancel_current_task(
         self,
@@ -647,6 +760,265 @@ class AgentOrchestrator:
             message=self._with_task_prefix(
                 current_task_id,
                 "已完成 Excel 重跑。我已基于当前任务已有的 manifest 重新生成 Excel 文件。",
+            ),
+            task_id=current_task_id,
+            snapshot=snapshot,
+        )
+
+    def _handle_current_task_rerun_cut(
+            self,
+            chat_id: str,
+            current_task_id: str | None,
+    ) -> AgentResult:
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        # 如果当前没有任务，则回退到最近一次已完成任务
+        if not current_task_id:
+            record = self.delivery_service.get_latest_completed_delivery_record_by_chat_id(chat_id)
+            if not record:
+                return AgentResult(
+                    status="ok",
+                    message="当前没有可用于重新切题的任务。",
+                    task_id=None,
+                    snapshot=snapshot,
+                )
+            current_task_id = record.get("task_id")
+
+            if current_task_id:
+                self.chat_session_service.bind_task(
+                    chat_id=chat_id,
+                    task_id=current_task_id,
+                )
+                self.chat_session_service.clear_waiting_for(chat_id)
+                self.chat_session_service.update_summary_memory(
+                    chat_id=chat_id,
+                    summary_memory=f"已将当前会话上下文切换到最近一次已完成任务 {current_task_id}，用于重新切题",
+                )
+                snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        blank_pdf_path, solution_pdf_path = self._get_task_material_paths(current_task_id)
+
+        if not blank_pdf_path or not Path(blank_pdf_path).exists():
+            return AgentResult(
+                status="ok",
+                message="无法重新切题，因为当前任务缺少可用的空白试卷 PDF。",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        if not solution_pdf_path or not Path(solution_pdf_path).exists():
+            return AgentResult(
+                status="ok",
+                message="无法重新切题，因为当前任务缺少可用的答案解析 PDF。",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        work_dir = str(settings.tasks_dir)
+
+        tool_call = ToolCall(
+            tool_name="process_paper",
+            tool_args={
+                "task_id": current_task_id,
+                "work_dir": work_dir,
+            },
+        )
+
+        tool_result = self.tool_executor.execute(tool_call)
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        if not tool_result.success:
+            return AgentResult(
+                status="failed",
+                message=f"重新切题失败：{tool_result.message}",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        return AgentResult(
+            status="ok",
+            message=self._with_task_prefix(
+                current_task_id,
+                "已重新解析试卷结构并切题。后续如需继续，可重新生成 manifest (Excel文件的信息集合)、重新提取答案和知识点，或重新打包上传。",
+            ),
+            task_id=current_task_id,
+            snapshot=snapshot,
+        )
+
+    def _handle_current_task_rerun_manifest(
+            self,
+            chat_id: str,
+            current_task_id: str | None,
+    ) -> AgentResult:
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        # 如果当前没有任务，则回退到最近一次已完成任务
+        if not current_task_id:
+            record = self.delivery_service.get_latest_completed_delivery_record_by_chat_id(chat_id)
+            if not record:
+                return AgentResult(
+                    status="ok",
+                    message="当前没有可用于重新生成 manifest 的任务。",
+                    task_id=None,
+                    snapshot=snapshot,
+                )
+            current_task_id = record.get("task_id")
+
+            if current_task_id:
+                self.chat_session_service.bind_task(
+                    chat_id=chat_id,
+                    task_id=current_task_id,
+                )
+                self.chat_session_service.clear_waiting_for(chat_id)
+                self.chat_session_service.update_summary_memory(
+                    chat_id=chat_id,
+                    summary_memory=f"已将当前会话上下文切换到最近一次已完成任务 {current_task_id}，用于重新生成 manifest",
+                )
+                snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        paths = self._get_task_artifact_paths(current_task_id)
+        task_root = paths["task_root"]
+
+        # 这里直接沿用你当前项目的真实目录结构
+        question_dir = paths["question_dir"]
+        analysis_dir = paths["analysis_dir"]
+        cleaned_analysis_dir = paths["cleaned_analysis_dir"]
+        manifest_path = paths["manifest_path"]
+
+        # 前置依赖校验：
+        # 重新生成 manifest 需要已有切题与解析图片产物
+        if not question_dir.exists():
+            return AgentResult(
+                status="ok",
+                message="无法重新生成 manifest，因为当前任务缺少 question_images 目录。请先完成切题。",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        if not analysis_dir.exists():
+            return AgentResult(
+                status="ok",
+                message="无法重新生成 manifest，因为当前任务缺少 analysis_images 目录。请先完成切题。",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        if not cleaned_analysis_dir.exists():
+            return AgentResult(
+                status="ok",
+                message="无法重新生成 manifest，因为当前任务缺少 cleaned_analysis_images 目录。请先完成切题。",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        tool_call = ToolCall(
+            tool_name="build_manifest",
+            tool_args={
+                "task_id": current_task_id,
+                "question_root_dir": str(question_dir),
+                "analysis_root_dir": str(analysis_dir),
+                "cleaned_analysis_root_dir": str(cleaned_analysis_dir),
+                "output_path": str(manifest_path),
+            },
+        )
+
+        tool_result = self.tool_executor.execute(tool_call)
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        if not tool_result.success:
+            return AgentResult(
+                status="failed",
+                message=f"重新生成 manifest 失败：{tool_result.message}",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        return AgentResult(
+            status="ok",
+            message=self._with_task_prefix(
+                current_task_id,
+                "已重新生成 manifest。我已基于当前任务已有的切题结果和解析图片重新构建清单。",
+            ),
+            task_id=current_task_id,
+            snapshot=snapshot,
+        )
+
+    def _handle_current_task_rerun_extraction(
+            self,
+            chat_id: str,
+            current_task_id: str | None,
+    ) -> AgentResult:
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        # 如果当前没有任务，则回退到最近一次已完成任务
+        if not current_task_id:
+            record = self.delivery_service.get_latest_completed_delivery_record_by_chat_id(chat_id)
+            if not record:
+                return AgentResult(
+                    status="ok",
+                    message="当前没有可用于重新提取答案和知识点的任务。",
+                    task_id=None,
+                    snapshot=snapshot,
+                )
+            current_task_id = record.get("task_id")
+
+            if current_task_id:
+                self.chat_session_service.bind_task(
+                    chat_id=chat_id,
+                    task_id=current_task_id,
+                )
+                self.chat_session_service.clear_waiting_for(chat_id)
+                self.chat_session_service.update_summary_memory(
+                    chat_id=chat_id,
+                    summary_memory=f"已将当前会话上下文切换到最近一次已完成任务 {current_task_id}，用于重新提取答案和知识点",
+                )
+                snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        paths = self._get_task_artifact_paths(current_task_id)
+
+        # 前置依赖：
+        # 重新提取答案和知识点依赖 manifest + Excel 输出路径
+        err = self._require_path(
+            paths["manifest_path"],
+            "无法重新提取答案和知识点，因为当前任务缺少 manifest.json。请先重新生成 manifest。",
+        )
+        if err:
+            return AgentResult(
+                status="ok",
+                message=err,
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        # 这里直接复用现有 write_excel
+        tool_call = ToolCall(
+            tool_name="write_excel",
+            tool_args={
+                "task_id": current_task_id,
+                "manifest_path": str(paths["manifest_path"]),
+                "output_path": str(paths["excel_path"]),
+                "school": "",
+                "year": "",
+                "paper_note": "",
+            },
+        )
+
+        tool_result = self.tool_executor.execute(tool_call)
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        if not tool_result.success:
+            return AgentResult(
+                status="failed",
+                message=f"重新提取答案和知识点失败：{tool_result.message}",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        return AgentResult(
+            status="ok",
+            message=self._with_task_prefix(
+                current_task_id,
+                "已重新提取答案和知识点，并更新 Excel 文件。",
             ),
             task_id=current_task_id,
             snapshot=snapshot,
@@ -1239,6 +1611,12 @@ class AgentOrchestrator:
                     current_task_id=current_task_id,
                 )
 
+            if self._is_current_task_rerun_cut_query(event.user_message):
+                return self._handle_current_task_rerun_cut(
+                    chat_id=event.chat_id,
+                    current_task_id=current_task_id,
+                )
+
             if self._is_current_task_rerun_excel_query(event.user_message):
                 return self._handle_current_task_rerun_excel(
                     chat_id=event.chat_id,
@@ -1247,6 +1625,18 @@ class AgentOrchestrator:
 
             if self._is_current_task_repackage_query(event.user_message):
                 return self._handle_current_task_repackage(
+                    chat_id=event.chat_id,
+                    current_task_id=current_task_id,
+                )
+
+            if self._is_current_task_rerun_manifest_query(event.user_message):
+                return self._handle_current_task_rerun_manifest(
+                    chat_id=event.chat_id,
+                    current_task_id=current_task_id,
+                )
+
+            if self._is_current_task_rerun_extraction_query(event.user_message):
+                return self._handle_current_task_rerun_extraction(
                     chat_id=event.chat_id,
                     current_task_id=current_task_id,
                 )

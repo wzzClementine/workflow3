@@ -273,7 +273,7 @@ completed / failed / cancelled
 
 ---
 
-## ⚙️ 开发原则（非常重要）
+## ⚙️ 开发原则
 
 ### ❗ 架构约束
 

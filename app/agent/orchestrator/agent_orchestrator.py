@@ -184,21 +184,31 @@ class AgentOrchestrator:
         "重建清单",
     }
 
-    CURRENT_TASK_RERUN_EXTRACTION_KEYWORDS = {
-        "当前任务只重新提取答案和知识点",
-        "当前任务重新提取答案和知识点",
+    CURRENT_TASK_RERUN_ANALYSIS_KEYWORDS = {
+        # 主说法：面向用户
+        "当前任务重新分析答案和知识点",
+        "当前任务只重新分析答案和知识点",
         "当前任务重新识别答案和知识点",
+        "当前任务只重新识别答案和知识点",
+
+        # 兼容旧说法
+        "当前任务重新提取答案和知识点",
+        "当前任务只重新提取答案和知识点",
         "当前任务重跑答案和知识点",
         "当前任务只重新提取答案",
         "当前任务重新提取答案",
         "当前任务重新提取知识点",
         "当前任务重新识别答案",
         "当前任务重新识别知识点",
-        "只重新提取答案和知识点",
-        "重新提取答案和知识点",
+
+        # 不带“当前任务”的宽松兼容
+        "重新分析答案和知识点",
+        "只重新分析答案和知识点",
         "重新识别答案和知识点",
+        "只重新识别答案和知识点",
+        "重新提取答案和知识点",
+        "只重新提取答案和知识点",
         "重跑答案和知识点",
-        "只重新提取答案",
         "重新提取答案",
         "重新提取知识点",
         "重新识别答案",
@@ -447,11 +457,11 @@ class AgentOrchestrator:
         normalized = text.strip().lower()
         return any(keyword in normalized for keyword in self.CURRENT_TASK_RERUN_MANIFEST_KEYWORDS)
 
-    def _is_current_task_rerun_extraction_query(self, text: str | None) -> bool:
+    def _is_current_task_rerun_analysis_query(self, text: str | None) -> bool:
         if not text:
             return False
         normalized = text.strip().lower()
-        return any(keyword in normalized for keyword in self.CURRENT_TASK_RERUN_EXTRACTION_KEYWORDS)
+        return any(keyword in normalized for keyword in self.CURRENT_TASK_RERUN_ANALYSIS_KEYWORDS)
 
     def _is_current_task_rerun_cut_query(self, text: str | None) -> bool:
         if not text:
@@ -755,11 +765,17 @@ class AgentOrchestrator:
                 snapshot=snapshot,
             )
 
+        self.chat_session_service.set_waiting_for(
+            chat_id,
+            "rerun_excel_followup",
+        )
+
         return AgentResult(
             status="ok",
             message=self._with_task_prefix(
                 current_task_id,
-                "已完成 Excel 重跑。我已基于当前任务已有的 manifest 重新生成 Excel 文件。",
+                "已重新生成 Excel。\n"
+                "是否继续重新打包并上传最新结果？"
             ),
             task_id=current_task_id,
             snapshot=snapshot,
@@ -835,11 +851,21 @@ class AgentOrchestrator:
                 snapshot=snapshot,
             )
 
+        self.chat_session_service.set_waiting_for(
+            chat_id,
+            "rerun_cut_followup",
+        )
+
         return AgentResult(
             status="ok",
             message=self._with_task_prefix(
                 current_task_id,
-                "已重新解析试卷结构并切题。后续如需继续，可重新生成 manifest (Excel文件的信息集合)、重新提取答案和知识点，或重新打包上传。",
+                "已重新切题。\n"
+                "如需让最新结果生效，建议继续：\n"
+                "1. 重新分析答案和知识点\n"
+                "2. 重新生成 Excel\n"
+                "3. 重新打包并上传\n\n"
+                "是否继续？"
             ),
             task_id=current_task_id,
             snapshot=snapshot,
@@ -943,7 +969,7 @@ class AgentOrchestrator:
             snapshot=snapshot,
         )
 
-    def _handle_current_task_rerun_extraction(
+    def _handle_current_task_rerun_analysis(
             self,
             chat_id: str,
             current_task_id: str | None,
@@ -956,7 +982,7 @@ class AgentOrchestrator:
             if not record:
                 return AgentResult(
                     status="ok",
-                    message="当前没有可用于重新提取答案和知识点的任务。",
+                    message="当前没有可用于重新分析答案和知识点的任务。",
                     task_id=None,
                     snapshot=snapshot,
                 )
@@ -970,36 +996,45 @@ class AgentOrchestrator:
                 self.chat_session_service.clear_waiting_for(chat_id)
                 self.chat_session_service.update_summary_memory(
                     chat_id=chat_id,
-                    summary_memory=f"已将当前会话上下文切换到最近一次已完成任务 {current_task_id}，用于重新提取答案和知识点",
+                    summary_memory=f"已将当前会话上下文切换到最近一次已完成任务 {current_task_id}，用于重新分析答案和知识点",
                 )
                 snapshot = self.memory_facade.build_agent_snapshot(chat_id)
 
         paths = self._get_task_artifact_paths(current_task_id)
 
-        # 前置依赖：
-        # 重新提取答案和知识点依赖 manifest + Excel 输出路径
-        err = self._require_path(
-            paths["manifest_path"],
-            "无法重新提取答案和知识点，因为当前任务缺少 manifest.json。请先重新生成 manifest。",
-        )
-        if err:
-            return AgentResult(
-                status="ok",
-                message=err,
-                task_id=current_task_id,
-                snapshot=snapshot,
-            )
+        # 前置依赖：重新分析答案和知识点依赖已有图片目录
+        checks = [
+            self._require_path(
+                paths["question_dir"],
+                "无法重新分析答案和知识点，因为当前任务缺少 question_images 目录。请先完成切题。"
+            ),
+            self._require_path(
+                paths["analysis_dir"],
+                "无法重新分析答案和知识点，因为当前任务缺少 analysis_images 目录。请先完成切题。"
+            ),
+            self._require_path(
+                paths["cleaned_analysis_dir"],
+                "无法重新分析答案和知识点，因为当前任务缺少 cleaned_analysis_images 目录。请先完成切题。"
+            ),
+        ]
 
-        # 这里直接复用现有 write_excel
+        for err in checks:
+            if err:
+                return AgentResult(
+                    status="ok",
+                    message=err,
+                    task_id=current_task_id,
+                    snapshot=snapshot,
+                )
+
         tool_call = ToolCall(
-            tool_name="write_excel",
+            tool_name="build_manifest",
             tool_args={
                 "task_id": current_task_id,
-                "manifest_path": str(paths["manifest_path"]),
-                "output_path": str(paths["excel_path"]),
-                "school": "",
-                "year": "",
-                "paper_note": "",
+                "question_root_dir": str(paths["question_dir"]),
+                "analysis_root_dir": str(paths["analysis_dir"]),
+                "cleaned_analysis_root_dir": str(paths["cleaned_analysis_dir"]),
+                "output_path": str(paths["manifest_path"]),
             },
         )
 
@@ -1009,7 +1044,7 @@ class AgentOrchestrator:
         if not tool_result.success:
             return AgentResult(
                 status="failed",
-                message=f"重新提取答案和知识点失败：{tool_result.message}",
+                message=f"重新分析答案和知识点失败：{tool_result.message}",
                 task_id=current_task_id,
                 snapshot=snapshot,
             )
@@ -1018,7 +1053,7 @@ class AgentOrchestrator:
             status="ok",
             message=self._with_task_prefix(
                 current_task_id,
-                "已重新提取答案和知识点，并更新 Excel 文件。",
+                "已重新分析答案和知识点，并更新题目清单。",
             ),
             task_id=current_task_id,
             snapshot=snapshot,
@@ -1119,11 +1154,17 @@ class AgentOrchestrator:
                 snapshot=snapshot,
             )
 
+        self.chat_session_service.set_waiting_for(
+            chat_id,
+            "rerun_package_followup",
+        )
+
         return AgentResult(
             status="ok",
             message=self._with_task_prefix(
                 current_task_id,
-                "已完成重新打包。我复用了当前任务已有的结构化结果和图片目录。",
+                "已重新打包完成。\n"
+                "是否现在上传最新结果？"
             ),
             task_id=current_task_id,
             snapshot=snapshot,
@@ -1201,6 +1242,8 @@ class AgentOrchestrator:
                 or (tool_result.data.get("upload_result", {}) or {}).get("root_folder_url", "")
         )
 
+        self.chat_session_service.clear_waiting_for(chat_id)
+
         message = self._with_task_prefix(
             current_task_id,
             "已完成重新上传。",
@@ -1214,6 +1257,190 @@ class AgentOrchestrator:
             task_id=current_task_id,
             snapshot=snapshot,
         )
+
+    def _handle_rerun_analysis_followup(
+            self,
+            event: AgentEvent,
+            current_task_id: str | None,
+    ) -> AgentResult:
+        snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
+
+        if self.confirmation_policy.is_confirm_message(event.user_message):
+            self.chat_session_service.clear_waiting_for(event.chat_id)
+
+            excel_result = self._handle_current_task_rerun_excel(
+                chat_id=event.chat_id,
+                current_task_id=current_task_id,
+            )
+            if excel_result.status != "ok":
+                return excel_result
+
+            # Excel 成功后会设置 rerun_excel_followup，这里要直接继续，所以清掉
+            self.chat_session_service.clear_waiting_for(event.chat_id)
+
+            repackage_result = self._handle_current_task_repackage(
+                chat_id=event.chat_id,
+                current_task_id=excel_result.task_id or current_task_id,
+            )
+            if repackage_result.status != "ok":
+                return repackage_result
+
+            # 打包成功后会设置 rerun_package_followup，这里要直接继续，所以清掉
+            self.chat_session_service.clear_waiting_for(event.chat_id)
+
+            return self._handle_current_task_redeliver(
+                chat_id=event.chat_id,
+                current_task_id=repackage_result.task_id or current_task_id,
+            )
+
+        if self.confirmation_policy.is_reject_message(event.user_message):
+            self.chat_session_service.clear_waiting_for(event.chat_id)
+            return AgentResult(
+                status="ok",
+                message="好的，当前已停留在重新分析答案和知识点的结果。",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        return AgentResult(
+            status="ok",
+            message="如果你希望我继续处理下游步骤，请回复“继续”；如果暂时不用，请回复“不用了”。",
+            task_id=current_task_id,
+            snapshot=snapshot,
+        )
+
+    def _handle_rerun_cut_followup(
+            self,
+            event: AgentEvent,
+            current_task_id: str | None,
+    ) -> AgentResult:
+        snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
+
+        if self.confirmation_policy.is_confirm_message(event.user_message):
+            self.chat_session_service.clear_waiting_for(event.chat_id)
+
+            analysis_result = self._handle_current_task_rerun_analysis(
+                chat_id=event.chat_id,
+                current_task_id=current_task_id,
+            )
+            if analysis_result.status != "ok":
+                return analysis_result
+
+            # analysis 成功后会设置 rerun_analysis_followup，这里要直接继续，所以清掉
+            self.chat_session_service.clear_waiting_for(event.chat_id)
+
+            excel_result = self._handle_current_task_rerun_excel(
+                chat_id=event.chat_id,
+                current_task_id=analysis_result.task_id or current_task_id,
+            )
+            if excel_result.status != "ok":
+                return excel_result
+
+            self.chat_session_service.clear_waiting_for(event.chat_id)
+
+            repackage_result = self._handle_current_task_repackage(
+                chat_id=event.chat_id,
+                current_task_id=excel_result.task_id or current_task_id,
+            )
+            if repackage_result.status != "ok":
+                return repackage_result
+
+            self.chat_session_service.clear_waiting_for(event.chat_id)
+
+            return self._handle_current_task_redeliver(
+                chat_id=event.chat_id,
+                current_task_id=repackage_result.task_id or current_task_id,
+            )
+
+        if self.confirmation_policy.is_reject_message(event.user_message):
+            self.chat_session_service.clear_waiting_for(event.chat_id)
+            return AgentResult(
+                status="ok",
+                message="好的，当前已停留在重新切题的结果。",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        return AgentResult(
+            status="ok",
+            message="如果你希望我继续处理下游步骤，请回复“继续”；如果暂时不用，请回复“不用了”。",
+            task_id=current_task_id,
+            snapshot=snapshot,
+        )
+
+    def _handle_rerun_excel_followup(
+            self,
+            event: AgentEvent,
+            current_task_id: str | None,
+    ) -> AgentResult:
+        snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
+
+        if self.confirmation_policy.is_confirm_message(event.user_message):
+            self.chat_session_service.clear_waiting_for(event.chat_id)
+
+            repackage_result = self._handle_current_task_repackage(
+                chat_id=event.chat_id,
+                current_task_id=current_task_id,
+            )
+            if repackage_result.status != "ok":
+                return repackage_result
+
+            # 重新打包成功后会设置 rerun_package_followup，
+            # 这里我们要直接继续上传，所以先清掉
+            self.chat_session_service.clear_waiting_for(event.chat_id)
+
+            return self._handle_current_task_redeliver(
+                chat_id=event.chat_id,
+                current_task_id=repackage_result.task_id or current_task_id,
+            )
+
+        if self.confirmation_policy.is_reject_message(event.user_message):
+            self.chat_session_service.clear_waiting_for(event.chat_id)
+            return AgentResult(
+                status="ok",
+                message="好的，当前已停留在重新生成 Excel 的结果。",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        return AgentResult(
+            status="ok",
+            message="如果你希望我继续处理下游步骤，请回复“继续”；如果暂时不用，请回复“不用了”。",
+            task_id=current_task_id,
+            snapshot=snapshot,
+        )
+
+    def _handle_rerun_package_followup(
+            self,
+            event: AgentEvent,
+            current_task_id: str | None,
+    ) -> AgentResult:
+        snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
+
+        if self.confirmation_policy.is_confirm_message(event.user_message):
+            self.chat_session_service.clear_waiting_for(event.chat_id)
+
+            return self._handle_current_task_redeliver(
+                chat_id=event.chat_id,
+                current_task_id=current_task_id,
+            )
+
+        if self.confirmation_policy.is_reject_message(event.user_message):
+            self.chat_session_service.clear_waiting_for(event.chat_id)
+            return AgentResult(
+                status="ok",
+                message="好的，当前已停留在重新打包的结果。",
+                task_id=current_task_id,
+                snapshot=snapshot,
+            )
+
+        return AgentResult(
+            status="ok",
+            message="如果你希望我继续上传最新结果，请回复“继续”；如果暂时不用，请回复“不用了”。",
+            task_id=current_task_id,
+            snapshot=snapshot,
+        )
+
 
     def _handle_latest_completed_task_redeliver(
             self,
@@ -1265,6 +1492,8 @@ class AgentOrchestrator:
                 (tool_result.data.get("record", {}) or {}).get("remote_url")
                 or (tool_result.data.get("upload_result", {}) or {}).get("root_folder_url", "")
         )
+
+        self.chat_session_service.clear_waiting_for(chat_id)
 
         message = self._with_task_prefix(
             target_task_id,
@@ -1586,7 +1815,33 @@ class AgentOrchestrator:
         #
         # 是否切换到新任务，只在文件上传时由 _resolve_task_for_file_upload() 决定。
 
+        waiting_for = session.get("waiting_for")
+
         if event.event_type == "text":
+            if waiting_for == "rerun_cut_followup":
+                return self._handle_rerun_cut_followup(
+                    event=event,
+                    current_task_id=current_task_id,
+                )
+
+            if waiting_for == "rerun_analysis_followup":
+                return self._handle_rerun_analysis_followup(
+                    event=event,
+                    current_task_id=current_task_id,
+                )
+
+            if waiting_for == "rerun_excel_followup":
+                return self._handle_rerun_excel_followup(
+                    event=event,
+                    current_task_id=current_task_id,
+                )
+
+            if waiting_for == "rerun_package_followup":
+                return self._handle_rerun_package_followup(
+                    event=event,
+                    current_task_id=current_task_id,
+                )
+
             if self._is_cancel_empty_tasks_message(event.user_message):
                 return self._handle_cancel_empty_tasks(
                     chat_id=event.chat_id,
@@ -1617,6 +1872,12 @@ class AgentOrchestrator:
                     current_task_id=current_task_id,
                 )
 
+            if self._is_current_task_rerun_analysis_query(event.user_message):
+                return self._handle_current_task_rerun_analysis(
+                    chat_id=event.chat_id,
+                    current_task_id=current_task_id,
+                )
+
             if self._is_current_task_rerun_excel_query(event.user_message):
                 return self._handle_current_task_rerun_excel(
                     chat_id=event.chat_id,
@@ -1631,12 +1892,6 @@ class AgentOrchestrator:
 
             if self._is_current_task_rerun_manifest_query(event.user_message):
                 return self._handle_current_task_rerun_manifest(
-                    chat_id=event.chat_id,
-                    current_task_id=current_task_id,
-                )
-
-            if self._is_current_task_rerun_extraction_query(event.user_message):
-                return self._handle_current_task_rerun_extraction(
                     chat_id=event.chat_id,
                     current_task_id=current_task_id,
                 )

@@ -15,8 +15,8 @@ from PIL import Image, ImageDraw
 # =========================
 # 配置
 # =========================
-TENCENT_SECRET_ID = os.getenv("TENCENT_SECRET_ID", "AKIDXyKWTH3kGcmoh6HKEvNiRaYKuSM4gEk9")
-TENCENT_SECRET_KEY = os.getenv("TENCENT_SECRET_KEY", "KcmjSxDF2bvEJ9l8HBrJWUElPp0wc5LM")
+TENCENT_SECRET_ID = os.getenv("TENCENT_SECRET_ID", "")
+TENCENT_SECRET_KEY = os.getenv("TENCENT_SECRET_KEY", "")
 TENCENT_REGION = os.getenv("TENCENT_REGION", "ap-beijing")
 TENCENT_ENDPOINT = "ocr.tencentcloudapi.com"
 TENCENT_SERVICE = "ocr"

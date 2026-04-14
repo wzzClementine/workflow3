@@ -135,6 +135,8 @@ class LLMManifestBuilder:
 
                 segment_info["answer"] = llm_result.get("answer", "uncertain")
                 segment_info["knowledge_points"] = llm_result.get("knowledge_points", []) or []
+                print(f"[LLM] KP: {llm_result.get("knowledge_points", [])}")
+                print(f"[LLM] REASON: {llm_result.get('llm_reason')}")
                 segment_info["is_subquestion"] = bool(llm_result.get("is_subquestion", False))
                 segment_info["subquestion_index"] = llm_result.get("subquestion_index")
                 segment_info["belongs_to_previous_parent"] = bool(

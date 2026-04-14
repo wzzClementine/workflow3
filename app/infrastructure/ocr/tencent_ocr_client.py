@@ -66,6 +66,36 @@ class TencentOCRClient:
 
         return retry(_call, retries=3, delay=1.0, backoff=2.0)
 
+    def question_split_layout_ocr(self, image_path: str) -> dict:
+        def _call():
+            image_base64 = self.image_to_base64(image_path)
+
+            req = models.QuestionSplitLayoutOCRRequest()
+            params = {
+                "ImageBase64": image_base64
+            }
+            req.from_json_string(json.dumps(params))
+
+            resp = self.client.QuestionSplitLayoutOCR(req)
+            return json.loads(resp.to_json_string())
+
+        return retry(_call, retries=3, delay=1.0, backoff=2.0)
+
+    def question_split_ocr(self, image_path: str) -> dict:
+        def _call():
+            image_base64 = self.image_to_base64(image_path)
+
+            req = models.QuestionSplitOCRRequest()
+            params = {
+                "ImageBase64": image_base64
+            }
+            req.from_json_string(json.dumps(params))
+
+            resp = self.client.QuestionSplitOCR(req)
+            return json.loads(resp.to_json_string())
+
+        return retry(_call, retries=3, delay=1.0, backoff=2.0)
+
     @staticmethod
     def get_text_detections(result: dict) -> list[dict]:
         if "TextDetections" in result:

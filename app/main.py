@@ -39,13 +39,14 @@ from app.skills.task import ManageTaskTool
 from app.skills.task.rerun_last_task_tool import RerunLastTaskTool
 from app.skills.ingestion import IngestMaterialsTool
 from app.skills.rendering import PDFRenderer
-from app.skills.segmentation import QuestionSegmenter, AnalysisSegmenter, AnalysisCleaner
+from app.skills.segmentation import QuestionSegmenter, AnalysisCleaner
 from app.skills.processing import ProcessPaperTool
 from app.skills.delivery import DeliverResultsTool
 from app.skills.ingestion.file_fetch_service import FileFetchService
 from app.skills.manifest import BuildManifestTool
 from app.skills.excel import WriteExcelTool
 from app.skills.packaging import PackagingTool
+from app.skills.parsing import BlankStructureParser
 
 
 from app.interfaces.api import agent_router
@@ -82,8 +83,9 @@ def build_app_components() -> dict:
     # ========= infra =========
     llm_client = QwenTextClient()
     vision_llm_client = QwenVisionClient()
-    ocr_client_for_cleaner = TencentOCRClient()
-    ocr_client = OCRForLLMClient()
+
+    tencent_ocr_client = TencentOCRClient()
+    xfyun_ocr_client = OCRForLLMClient()
 
     feishu_auth_client = FeishuAuthClient()
 
@@ -122,9 +124,9 @@ def build_app_components() -> dict:
 
     # ========= skill instances =========
     pdf_renderer = PDFRenderer()
-    question_segmenter = QuestionSegmenter(ocr_client=ocr_client)
-    analysis_segmenter = AnalysisSegmenter()
-    analysis_cleaner = AnalysisCleaner(ocr_client=ocr_client_for_cleaner)
+    question_segmenter = QuestionSegmenter(ocr_client=tencent_ocr_client)
+    analysis_cleaner = AnalysisCleaner(ocr_client=tencent_ocr_client)
+    blank_structure_parser = BlankStructureParser(ocr_client=xfyun_ocr_client)
 
     # ========= tools =========
     tool_registry = ToolRegistry()
@@ -158,8 +160,8 @@ def build_app_components() -> dict:
             task_memory_service=memory_service,
             pdf_renderer=pdf_renderer,
             question_segmenter=question_segmenter,
-            analysis_segmenter=analysis_segmenter,
             analysis_cleaner=analysis_cleaner,
+            blank_structure_parser=blank_structure_parser,
         )
     )
 

@@ -48,6 +48,21 @@ class AgentOrchestrator:
         "最近一次处理结果",
     }
 
+    CURRENT_TASK_STATUS_QUERY_KEYWORDS = {
+        "当前任务是哪个",
+        "我当前任务是哪个",
+        "当前任务是什么",
+        "我当前任务是什么",
+        "现在在处理哪个任务",
+        "当前在处理哪个任务",
+        "当前任务是哪一个",
+        "当前处理的是哪个任务",
+        "当前任务情况",
+        "当前任务状态",
+        "现在任务是什么",
+        "现在处理到哪个任务",
+    }
+
     CURRENT_TASK_RESULT_QUERY_KEYWORDS = {
         "当前任务结果",
         "当前任务的结果",
@@ -63,6 +78,9 @@ class AgentOrchestrator:
         "把它的下载链接给我",
         "他的下载链接",
         "它的下载链接",
+        "当前任务访问链接",
+        "当前任务的访问链接",
+        "这个任务的访问链接",
     }
 
     MISSING_MATERIALS_QUERY_KEYWORDS = {
@@ -123,13 +141,21 @@ class AgentOrchestrator:
         "当前任务重跑excel",
         "当前任务只重跑excel",
         "当前任务重新做excel",
+        "当前任务更新excel",
+        "当前任务重新导出excel",
+        "当前任务重做excel",
         "当前任务重新生成 Excel",
         "当前任务重跑 Excel",
         "当前任务只重跑 Excel",
         "当前任务重新做 Excel",
         "当前任务只重新生成 Excel",
+        "当前任务更新 Excel",
+        "当前任务重新导出 Excel",
+        "当前任务重做 Excel",
         "重新生成Excel吧",
-        "重新生成Excel"
+        "重新生成Excel",
+        "重新导出Excel",
+        "重做Excel",
     }
 
     CURRENT_TASK_REPACKAGE_KEYWORDS = {
@@ -137,8 +163,13 @@ class AgentOrchestrator:
         "当前任务重新打包",
         "当前任务重跑打包",
         "当前任务重新打包一下",
+        "当前任务重新整理打包",
+        "当前任务重新生成交付包",
+        "当前任务重新整理结果",
         "重新打包吧",
-        "重新打包"
+        "重新打包",
+        "重新整理打包",
+        "重新生成交付包",
     }
 
     CURRENT_TASK_REDELIVER_KEYWORDS = {
@@ -147,8 +178,13 @@ class AgentOrchestrator:
         "当前任务重新上传",
         "当前任务重跑上传",
         "当前任务重新上传到飞书",
+        "当前任务重新上传最新结果",
+        "当前任务重新交付",
         "重新上传吧",
-        "重新上传"
+        "重新上传",
+        "上传结果",
+        "上传最新结果",
+        "重新交付",
     }
 
     LATEST_COMPLETED_REDELIVER_KEYWORDS = {
@@ -185,11 +221,13 @@ class AgentOrchestrator:
     }
 
     CURRENT_TASK_RERUN_ANALYSIS_KEYWORDS = {
-        # 主说法：面向用户
         "当前任务重新分析答案和知识点",
         "当前任务只重新分析答案和知识点",
         "当前任务重新识别答案和知识点",
         "当前任务只重新识别答案和知识点",
+        "当前任务重新分析答案",
+        "当前任务重新分析知识点",
+        "当前任务重跑答案和知识点分析",
 
         # 兼容旧说法
         "当前任务重新提取答案和知识点",
@@ -206,6 +244,9 @@ class AgentOrchestrator:
         "只重新分析答案和知识点",
         "重新识别答案和知识点",
         "只重新识别答案和知识点",
+        "重新分析答案",
+        "重新分析知识点",
+        "重跑答案和知识点分析",
         "重新提取答案和知识点",
         "只重新提取答案和知识点",
         "重跑答案和知识点",
@@ -221,15 +262,17 @@ class AgentOrchestrator:
         "当前任务重新切图",
         "当前任务重新解析试卷结构",
         "当前任务重新解析结构",
-        "当前任务重新切题",
         "当前任务重新切割题目",
+        "当前任务重新分题",
+        "当前任务重新切分题目",
         "重新切题",
         "重跑切题",
         "重新切图",
         "重新解析试卷结构",
         "重新解析结构",
-        "重新切题",
         "重新切割题目",
+        "重新分题",
+        "重新切分题目",
     }
 
     TERMINAL_STATUSES = {
@@ -469,6 +512,12 @@ class AgentOrchestrator:
         normalized = text.strip().lower()
         return any(keyword in normalized for keyword in self.CURRENT_TASK_RERUN_CUT_KEYWORDS)
 
+    def _is_current_task_status_query(self, text: str | None) -> bool:
+        if not text:
+            return False
+        normalized = text.strip().lower()
+        return any(keyword in normalized for keyword in self.CURRENT_TASK_STATUS_QUERY_KEYWORDS)
+
     def _handle_cancel_current_task(
         self,
         chat_id: str,
@@ -624,6 +673,53 @@ class AgentOrchestrator:
 
         return "当前任务还没有可获取的处理结果，请先完成处理。"
 
+    def _handle_current_task_status_query(
+            self,
+            chat_id: str,
+            current_task_id: str | None,
+    ) -> AgentResult:
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+
+        if not current_task_id:
+            return AgentResult(
+                status="ok",
+                message="当前没有绑定任务。",
+                task_id=None,
+                snapshot=snapshot,
+            )
+
+        current_task_summary = snapshot.get("current_task_summary") or {}
+        latest_materials_summary = current_task_summary.get("latest_materials_summary") or {}
+
+        display_name = self._get_task_display_name(current_task_id)
+        status_text = current_task_summary.get("status") or "未知状态"
+        stage_text = current_task_summary.get("stage") or "未知阶段"
+
+        has_blank = latest_materials_summary.get("has_blank_pdf")
+        has_solution = latest_materials_summary.get("has_solution_pdf")
+
+        material_desc = []
+        if has_blank:
+            material_desc.append("已上传试卷 PDF")
+        if has_solution:
+            material_desc.append("已上传答案解析 PDF")
+        if not material_desc:
+            material_desc.append("尚未上传任何文件")
+
+        message = (
+            f"当前任务是：{display_name}\n"
+            f"状态：{status_text}\n"
+            f"阶段：{stage_text}\n"
+            f"材料情况：{'，'.join(material_desc)}"
+        )
+
+        return AgentResult(
+            status="ok",
+            message=message,
+            task_id=current_task_id,
+            snapshot=snapshot,
+        )
+
     def _handle_current_task_result_query(
         self,
         chat_id: str,
@@ -742,6 +838,12 @@ class AgentOrchestrator:
                 snapshot=snapshot,
             )
 
+        self._send_task_text(
+            chat_id,
+            current_task_id,
+            "正在重新生成 Excel，请稍等……",
+        )
+
         tool_call = ToolCall(
             tool_name="write_excel",
             tool_args={
@@ -831,6 +933,12 @@ class AgentOrchestrator:
             )
 
         work_dir = str(settings.tasks_dir)
+
+        self._send_task_text(
+            chat_id,
+            current_task_id,
+            "正在重新切题并解析试卷结构，请稍等……",
+        )
 
         tool_call = ToolCall(
             tool_name="process_paper",
@@ -937,6 +1045,12 @@ class AgentOrchestrator:
                 snapshot=snapshot,
             )
 
+        self._send_task_text(
+            chat_id,
+            current_task_id,
+            "正在重新分析答案和知识点，请稍等……",
+        )
+
         tool_call = ToolCall(
             tool_name="build_manifest",
             tool_args={
@@ -1027,6 +1141,12 @@ class AgentOrchestrator:
                     snapshot=snapshot,
                 )
 
+        self._send_task_text(
+            chat_id,
+            current_task_id,
+            "正在重新分析答案和知识点，请稍等……",
+        )
+
         tool_call = ToolCall(
             tool_name="build_manifest",
             tool_args={
@@ -1049,11 +1169,17 @@ class AgentOrchestrator:
                 snapshot=snapshot,
             )
 
+        self.chat_session_service.set_waiting_for(
+            chat_id,
+            "rerun_analysis_followup",
+        )
+
         return AgentResult(
             status="ok",
             message=self._with_task_prefix(
                 current_task_id,
-                "已重新分析答案和知识点，并更新题目清单。",
+                "已重新分析答案和知识点，并更新题目清单。\n"
+                "是否继续重新生成 Excel，并打包上传最新结果？"
             ),
             task_id=current_task_id,
             snapshot=snapshot,
@@ -1128,6 +1254,12 @@ class AgentOrchestrator:
                              .get("latest_materials_summary", {})
                              .get("blank_pdf_local_path")
                          ) or ""
+
+        self._send_task_text(
+            chat_id,
+            current_task_id,
+            "正在重新打包结果，请稍等……",
+        )
 
         tool_call = ToolCall(
             tool_name="package_results",
@@ -1217,6 +1349,12 @@ class AgentOrchestrator:
                 task_id=current_task_id,
                 snapshot=snapshot,
             )
+
+        self._send_task_text(
+            chat_id,
+            current_task_id,
+            "正在重新上传最新结果，请稍等……",
+        )
 
         tool_call = ToolCall(
             tool_name="deliver_results",
@@ -1468,6 +1606,12 @@ class AgentOrchestrator:
                 task_id=current_task_id,
                 snapshot=snapshot,
             )
+
+        self._send_task_text(
+            chat_id,
+            target_task_id,
+            "正在重新上传最近一次已完成任务的结果，请稍等……",
+        )
 
         tool_call = ToolCall(
             tool_name="deliver_results",
@@ -1818,29 +1962,63 @@ class AgentOrchestrator:
         waiting_for = session.get("waiting_for")
 
         if event.event_type == "text":
-            if waiting_for == "rerun_cut_followup":
-                return self._handle_rerun_cut_followup(
-                    event=event,
-                    current_task_id=current_task_id,
-                )
+            # follow-up 模式下：
+            # 只有“确认 / 拒绝”继续留在 follow-up 分流里；
+            # 其他任何文本，一律视为新的业务命令，先清掉 waiting_for，再按正常逻辑处理。
+            if waiting_for:
+                if self.confirmation_policy.is_confirm_message(event.user_message):
+                    if waiting_for == "rerun_cut_followup":
+                        return self._handle_rerun_cut_followup(
+                            event=event,
+                            current_task_id=current_task_id,
+                        )
 
-            if waiting_for == "rerun_analysis_followup":
-                return self._handle_rerun_analysis_followup(
-                    event=event,
-                    current_task_id=current_task_id,
-                )
+                    if waiting_for == "rerun_analysis_followup":
+                        return self._handle_rerun_analysis_followup(
+                            event=event,
+                            current_task_id=current_task_id,
+                        )
 
-            if waiting_for == "rerun_excel_followup":
-                return self._handle_rerun_excel_followup(
-                    event=event,
-                    current_task_id=current_task_id,
-                )
+                    if waiting_for == "rerun_excel_followup":
+                        return self._handle_rerun_excel_followup(
+                            event=event,
+                            current_task_id=current_task_id,
+                        )
 
-            if waiting_for == "rerun_package_followup":
-                return self._handle_rerun_package_followup(
-                    event=event,
-                    current_task_id=current_task_id,
-                )
+                    if waiting_for == "rerun_package_followup":
+                        return self._handle_rerun_package_followup(
+                            event=event,
+                            current_task_id=current_task_id,
+                        )
+
+                if self.confirmation_policy.is_reject_message(event.user_message):
+                    if waiting_for == "rerun_cut_followup":
+                        return self._handle_rerun_cut_followup(
+                            event=event,
+                            current_task_id=current_task_id,
+                        )
+
+                    if waiting_for == "rerun_analysis_followup":
+                        return self._handle_rerun_analysis_followup(
+                            event=event,
+                            current_task_id=current_task_id,
+                        )
+
+                    if waiting_for == "rerun_excel_followup":
+                        return self._handle_rerun_excel_followup(
+                            event=event,
+                            current_task_id=current_task_id,
+                        )
+
+                    if waiting_for == "rerun_package_followup":
+                        return self._handle_rerun_package_followup(
+                            event=event,
+                            current_task_id=current_task_id,
+                        )
+
+                # 不是确认 / 拒绝，就默认视为新命令
+                self.chat_session_service.clear_waiting_for(event.chat_id)
+                waiting_for = None
 
             if self._is_cancel_empty_tasks_message(event.user_message):
                 return self._handle_cancel_empty_tasks(
@@ -1922,6 +2100,12 @@ class AgentOrchestrator:
 
             if self._is_result_query(event.user_message):
                 return self._handle_result_query(
+                    chat_id=event.chat_id,
+                    current_task_id=current_task_id,
+                )
+
+            if self._is_current_task_status_query(event.user_message):
+                return self._handle_current_task_status_query(
                     chat_id=event.chat_id,
                     current_task_id=current_task_id,
                 )

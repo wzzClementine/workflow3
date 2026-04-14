@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     tencent_secret_id: str = ""
     tencent_secret_key: str = ""
     tencent_region: str = "ap-beijing"
+    tencent_endpoint: str = ""
+    tencent_service: str = ""
+    tencent_version: str = ""
 
     llm_provider: str = "volcengine"
     llm_mock_mode: bool = True

@@ -332,6 +332,92 @@ class AgentOrchestrator:
             self._with_task_prefix(task_id, text),
         )
 
+    def _safe_send_task_text(
+            self,
+            chat_id: str,
+            task_id: str | None,
+            text: str,
+    ) -> None:
+        try:
+            self._send_task_text(chat_id, task_id, text)
+        except Exception:
+            pass
+
+    def _finalize_failure(
+            self,
+            chat_id: str,
+            task_id: str | None,
+            user_message: str,
+            internal_message: str | None = None,
+            step_name: str | None = None,
+            notify_user: bool = False,
+    ) -> AgentResult:
+        if task_id:
+            try:
+                self.task_service.mark_failed(task_id, internal_message or user_message)
+            except Exception:
+                pass
+
+        try:
+            self.chat_session_service.clear_waiting_for(chat_id)
+        except Exception:
+            pass
+
+        try:
+            summary_text = "任务失败"
+            if step_name:
+                summary_text += f"：{step_name}"
+            if task_id:
+                summary_text += f"（{task_id}）"
+            if internal_message:
+                summary_text += f"；原因：{internal_message}"
+
+            self.chat_session_service.update_summary_memory(
+                chat_id=chat_id,
+                summary_memory=summary_text,
+            )
+        except Exception:
+            pass
+
+        if notify_user:
+            self._safe_send_task_text(chat_id, task_id, f"❌ {user_message}")
+
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+        return AgentResult(
+            status="failed",
+            message=user_message,
+            task_id=task_id,
+            snapshot=snapshot,
+        )
+
+    def _execute_tool_or_fail(
+            self,
+            chat_id: str,
+            task_id: str | None,
+            tool_call: ToolCall,
+            step_name: str,
+    ):
+        tool_result = self.tool_executor.execute(tool_call)
+
+        if tool_result.success:
+            return tool_result, None
+
+        internal_message = (
+                (tool_result.data or {}).get("debug_message")
+                or tool_result.message
+        )
+
+        failure_result = self._finalize_failure(
+            chat_id=chat_id,
+            task_id=task_id,
+            user_message=f"{step_name}失败：{tool_result.message}",
+            internal_message=internal_message,
+            step_name=step_name,
+            notify_user=False,
+        )
+        return None, failure_result
+
+
     def _get_task_root(self, task_id: str) -> Path:
         return Path(settings.tasks_dir) / task_id
 
@@ -400,16 +486,16 @@ class AgentOrchestrator:
                 tool_name=decision.tool_name,
                 tool_args=decision.tool_args,
             )
-            tool_result = self.tool_executor.execute(tool_call)
-            snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
+            tool_result, failure_result = self._execute_tool_or_fail(
+                chat_id=event.chat_id,
+                task_id=task_id,
+                tool_call=tool_call,
+                step_name=decision.tool_name or "工具执行",
+            )
+            if failure_result:
+                return failure_result
 
-            if not tool_result.success:
-                return AgentResult(
-                    status="failed",
-                    message=tool_result.message,
-                    task_id=task_id,
-                    snapshot=snapshot,
-                )
+            snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
 
         message = decision.reply
         if tool_result and tool_result.message:
@@ -856,16 +942,16 @@ class AgentOrchestrator:
             },
         )
 
-        tool_result = self.tool_executor.execute(tool_call)
-        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+        tool_result, failure_result = self._execute_tool_or_fail(
+            chat_id=chat_id,
+            task_id=current_task_id,
+            tool_call=tool_call,
+            step_name="重新生成 Excel",
+        )
+        if failure_result:
+            return failure_result
 
-        if not tool_result.success:
-            return AgentResult(
-                status="failed",
-                message=f"重跑 Excel 失败：{tool_result.message}",
-                task_id=current_task_id,
-                snapshot=snapshot,
-            )
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
 
         self.chat_session_service.set_waiting_for(
             chat_id,
@@ -948,16 +1034,16 @@ class AgentOrchestrator:
             },
         )
 
-        tool_result = self.tool_executor.execute(tool_call)
-        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+        tool_result, failure_result = self._execute_tool_or_fail(
+            chat_id=chat_id,
+            task_id=current_task_id,
+            tool_call=tool_call,
+            step_name="重新切题",
+        )
+        if failure_result:
+            return failure_result
 
-        if not tool_result.success:
-            return AgentResult(
-                status="failed",
-                message=f"重新切题失败：{tool_result.message}",
-                task_id=current_task_id,
-                snapshot=snapshot,
-            )
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
 
         self.chat_session_service.set_waiting_for(
             chat_id,
@@ -1062,16 +1148,16 @@ class AgentOrchestrator:
             },
         )
 
-        tool_result = self.tool_executor.execute(tool_call)
-        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+        tool_result, failure_result = self._execute_tool_or_fail(
+            chat_id=chat_id,
+            task_id=current_task_id,
+            tool_call=tool_call,
+            step_name="重新生成 manifest",
+        )
+        if failure_result:
+            return failure_result
 
-        if not tool_result.success:
-            return AgentResult(
-                status="failed",
-                message=f"重新生成 manifest 失败：{tool_result.message}",
-                task_id=current_task_id,
-                snapshot=snapshot,
-            )
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
 
         return AgentResult(
             status="ok",
@@ -1158,16 +1244,16 @@ class AgentOrchestrator:
             },
         )
 
-        tool_result = self.tool_executor.execute(tool_call)
-        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+        tool_result, failure_result = self._execute_tool_or_fail(
+            chat_id=chat_id,
+            task_id=current_task_id,
+            tool_call=tool_call,
+            step_name="重新分析答案和知识点",
+        )
+        if failure_result:
+            return failure_result
 
-        if not tool_result.success:
-            return AgentResult(
-                status="failed",
-                message=f"重新分析答案和知识点失败：{tool_result.message}",
-                task_id=current_task_id,
-                snapshot=snapshot,
-            )
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
 
         self.chat_session_service.set_waiting_for(
             chat_id,
@@ -1275,16 +1361,16 @@ class AgentOrchestrator:
             },
         )
 
-        tool_result = self.tool_executor.execute(tool_call)
-        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+        tool_result, failure_result = self._execute_tool_or_fail(
+            chat_id=chat_id,
+            task_id=current_task_id,
+            tool_call=tool_call,
+            step_name="重新打包结果",
+        )
+        if failure_result:
+            return failure_result
 
-        if not tool_result.success:
-            return AgentResult(
-                status="failed",
-                message=f"重新打包失败：{tool_result.message}",
-                task_id=current_task_id,
-                snapshot=snapshot,
-            )
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
 
         self.chat_session_service.set_waiting_for(
             chat_id,
@@ -1364,16 +1450,16 @@ class AgentOrchestrator:
             },
         )
 
-        tool_result = self.tool_executor.execute(tool_call)
-        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+        tool_result, failure_result = self._execute_tool_or_fail(
+            chat_id=chat_id,
+            task_id=current_task_id,
+            tool_call=tool_call,
+            step_name="重新上传结果",
+        )
+        if failure_result:
+            return failure_result
 
-        if not tool_result.success:
-            return AgentResult(
-                status="failed",
-                message=f"重新上传失败：{tool_result.message}",
-                task_id=current_task_id,
-                snapshot=snapshot,
-            )
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
 
         remote_url = (
                 (tool_result.data.get("record", {}) or {}).get("remote_url")
@@ -1621,16 +1707,16 @@ class AgentOrchestrator:
             },
         )
 
-        tool_result = self.tool_executor.execute(tool_call)
-        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
+        tool_result, failure_result = self._execute_tool_or_fail(
+            chat_id=chat_id,
+            task_id=target_task_id,
+            tool_call=tool_call,
+            step_name="重新上传最近一次已完成任务的结果",
+        )
+        if failure_result:
+            return failure_result
 
-        if not tool_result.success:
-            return AgentResult(
-                status="failed",
-                message=f"最近一次已完成任务重新上传失败：{tool_result.message}",
-                task_id=target_task_id,
-                snapshot=snapshot,
-            )
+        snapshot = self.memory_facade.build_agent_snapshot(chat_id)
 
         remote_url = (
                 (tool_result.data.get("record", {}) or {}).get("remote_url")
@@ -1923,554 +2009,608 @@ class AgentOrchestrator:
         return new_task_id, f"ℹ️ 检测到当前任务状态异常，我会把这次新上传的文件作为一个新任务来处理。\n👉 当前任务已切换为：{switched_name}"
 
     def handle_event(
-        self,
-        event: AgentEvent,
+            self,
+            event: AgentEvent,
     ) -> AgentResult:
-        session = self.chat_session_service.ensure_session(event.chat_id)
+        session = None
+        current_task_id = None
 
-        if event.event_type == "text":
-            self.chat_session_service.update_last_message(
-                chat_id=event.chat_id,
-                last_user_message=event.user_message,
-                last_message_type="text",
-            )
+        try:
+            session = self.chat_session_service.ensure_session(event.chat_id)
 
-        if event.event_type == "file_upload" and event.files:
-            self.feishu_message_sender.send_text(
-                event.chat_id,
-                "📥 已接收文件，正在登记材料并下载到本地，请稍候。",
-            )
-
-            latest_file = event.files[-1]
-            self.chat_session_service.update_last_uploaded_file(
-                chat_id=event.chat_id,
-                file_name=latest_file.file_name,
-                file_key=latest_file.file_key,
-            )
-
-        current_task_id = session.get("current_task_id")
-        bound_task = self.task_service.get_task(current_task_id) if current_task_id else None
-
-        # 重要：
-        # 不再因为普通文本消息就自动解绑 completed / failed / cancelled 任务。
-        # 这样当用户刚刚通过“单项重跑”把上下文切到最近一次已完成任务后，
-        # 后续继续问“当前任务是哪个 / 当前任务只重新上传结果 / 当前任务只重新打包”
-        # 都还能沿用同一个 task 上下文。
-        #
-        # 是否切换到新任务，只在文件上传时由 _resolve_task_for_file_upload() 决定。
-
-        waiting_for = session.get("waiting_for")
-
-        if event.event_type == "text":
-            # follow-up 模式下：
-            # 只有“确认 / 拒绝”继续留在 follow-up 分流里；
-            # 其他任何文本，一律视为新的业务命令，先清掉 waiting_for，再按正常逻辑处理。
-            if waiting_for:
-                if self.confirmation_policy.is_confirm_message(event.user_message):
-                    if waiting_for == "rerun_cut_followup":
-                        return self._handle_rerun_cut_followup(
-                            event=event,
-                            current_task_id=current_task_id,
-                        )
-
-                    if waiting_for == "rerun_analysis_followup":
-                        return self._handle_rerun_analysis_followup(
-                            event=event,
-                            current_task_id=current_task_id,
-                        )
-
-                    if waiting_for == "rerun_excel_followup":
-                        return self._handle_rerun_excel_followup(
-                            event=event,
-                            current_task_id=current_task_id,
-                        )
-
-                    if waiting_for == "rerun_package_followup":
-                        return self._handle_rerun_package_followup(
-                            event=event,
-                            current_task_id=current_task_id,
-                        )
-
-                if self.confirmation_policy.is_reject_message(event.user_message):
-                    if waiting_for == "rerun_cut_followup":
-                        return self._handle_rerun_cut_followup(
-                            event=event,
-                            current_task_id=current_task_id,
-                        )
-
-                    if waiting_for == "rerun_analysis_followup":
-                        return self._handle_rerun_analysis_followup(
-                            event=event,
-                            current_task_id=current_task_id,
-                        )
-
-                    if waiting_for == "rerun_excel_followup":
-                        return self._handle_rerun_excel_followup(
-                            event=event,
-                            current_task_id=current_task_id,
-                        )
-
-                    if waiting_for == "rerun_package_followup":
-                        return self._handle_rerun_package_followup(
-                            event=event,
-                            current_task_id=current_task_id,
-                        )
-
-                # 不是确认 / 拒绝，就默认视为新命令
-                self.chat_session_service.clear_waiting_for(event.chat_id)
-                waiting_for = None
-
-            if self._is_cancel_empty_tasks_message(event.user_message):
-                return self._handle_cancel_empty_tasks(
+            if event.event_type == "text":
+                self.chat_session_service.update_last_message(
                     chat_id=event.chat_id,
-                    current_task_id=current_task_id,
+                    last_user_message=event.user_message,
+                    last_message_type="text",
                 )
 
-            if self._is_cancel_missing_tasks_message(event.user_message):
-                return self._handle_cancel_missing_tasks(
-                    chat_id=event.chat_id,
-                    current_task_id=current_task_id,
-                )
-
-            if self._is_cancel_message(event.user_message):
-                return self._handle_cancel_current_task(
-                    chat_id=event.chat_id,
-                    task_id=current_task_id,
-                )
-
-            if self._is_restart_message(event.user_message):
-                return self._handle_restart_current_task(
-                    chat_id=event.chat_id,
-                    current_task_id=current_task_id,
-                )
-
-            if self._is_current_task_rerun_cut_query(event.user_message):
-                return self._handle_current_task_rerun_cut(
-                    chat_id=event.chat_id,
-                    current_task_id=current_task_id,
-                )
-
-            if self._is_current_task_rerun_analysis_query(event.user_message):
-                return self._handle_current_task_rerun_analysis(
-                    chat_id=event.chat_id,
-                    current_task_id=current_task_id,
-                )
-
-            if self._is_current_task_rerun_excel_query(event.user_message):
-                return self._handle_current_task_rerun_excel(
-                    chat_id=event.chat_id,
-                    current_task_id=current_task_id,
-                )
-
-            if self._is_current_task_repackage_query(event.user_message):
-                return self._handle_current_task_repackage(
-                    chat_id=event.chat_id,
-                    current_task_id=current_task_id,
-                )
-
-            if self._is_current_task_rerun_manifest_query(event.user_message):
-                return self._handle_current_task_rerun_manifest(
-                    chat_id=event.chat_id,
-                    current_task_id=current_task_id,
-                )
-
-            if self._is_current_task_redeliver_query(event.user_message):
-                return self._handle_current_task_redeliver(
-                    chat_id=event.chat_id,
-                    current_task_id=current_task_id,
-                )
-
-            if self._is_latest_completed_redeliver_query(event.user_message):
-                return self._handle_latest_completed_task_redeliver(
-                    chat_id=event.chat_id,
-                    current_task_id=current_task_id,
-                )
-
-            if self._is_current_task_result_query(event.user_message):
-                return self._handle_current_task_result_query(
-                    chat_id=event.chat_id,
-                    current_task_id=current_task_id,
-                )
-
-            if self._is_missing_materials_query(event.user_message):
-                return self._handle_missing_materials_query(
-                    chat_id=event.chat_id,
-                    current_task_id=current_task_id,
-                )
-
-            if self._is_result_query(event.user_message):
-                return self._handle_result_query(
-                    chat_id=event.chat_id,
-                    current_task_id=current_task_id,
-                )
-
-            if self._is_current_task_status_query(event.user_message):
-                return self._handle_current_task_status_query(
-                    chat_id=event.chat_id,
-                    current_task_id=current_task_id,
-                )
-
-        if event.event_type == "file_upload" and event.files:
-            target_task_id, handoff_message = self._resolve_task_for_file_upload(
-                chat_id=event.chat_id,
-                current_task_id=current_task_id,
-                bound_task=bound_task,
-                latest_uploaded_file_name=event.files[-1].file_name if event.files else None,
-            )
-
-            if handoff_message:
+            if event.event_type == "file_upload" and event.files:
                 self.feishu_message_sender.send_text(
                     event.chat_id,
-                    handoff_message,
+                    "📥 已接收文件，正在登记材料并下载到本地，请稍候。",
                 )
 
-            tool_call = ToolCall(
-                tool_name="ingest_materials",
-                tool_args={
-                    "task_id": target_task_id,
-                    "files": [
-                        {
-                            "file_name": item.file_name,
-                            "file_key": item.file_key,
-                            "mime_type": item.mime_type,
-                            "message_id": item.message_id,
-                        }
-                        for item in event.files
-                    ],
-                },
-            )
-
-            tool_result = self.tool_executor.execute(tool_call)
-            snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
-
-            return AgentResult(
-                status="ok" if tool_result.success else "failed",
-                message=tool_result.message,
-                task_id=target_task_id,
-                snapshot=snapshot,
-            )
-
-        if not current_task_id and event.event_type == "file_upload":
-            task = self.task_service.create_task(
-                chat_id=event.chat_id,
-                created_by="agent",
-            )
-            current_task_id = task["task_id"]
-
-            self.chat_session_service.bind_task(
-                chat_id=event.chat_id,
-                task_id=current_task_id,
-            )
-
-            self.chat_session_service.update_summary_memory(
-                chat_id=event.chat_id,
-                summary_memory=f"已自动创建任务 {current_task_id}",
-            )
-
-        snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
-        current_stage = snapshot.get("current_stage")
-
-        if (
-            current_stage == TaskState.WAITING_CONFIRMATION.value
-            and event.event_type == "text"
-        ):
-            if self.confirmation_policy.is_confirm_message(event.user_message):
-                self.feishu_message_sender.send_text(
-                    event.chat_id,
-                    self._with_task_prefix(
-                        current_task_id,
-                        "✅ 已确认材料，开始处理试卷。\n\n"
-                        "我会依次完成：\n"
-                        "- 试卷结构解析与切题\n"
-                        "- 答案与知识点提取\n"
-                        "- 结果整理并上传\n\n"
-                        "请稍候，处理中..."
-                    ),
-                )
-
-                stage_tool_call = ToolCall(
-                    tool_name="manage_task",
-                    tool_args={
-                        "action": "advance_stage",
-                        "task_id": current_task_id,
-                        "target_stage": "processing",
-                        "next_action_hint": "开始执行完整处理链",
-                    },
-                )
-
-                stage_result = self.tool_executor.execute(stage_tool_call)
-                if not stage_result.success:
-                    snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
-                    return AgentResult(
-                        status="failed",
-                        message=stage_result.message,
-                        task_id=current_task_id,
-                        snapshot=snapshot,
-                    )
-
-                self.chat_session_service.clear_waiting_for(event.chat_id)
-                self.chat_session_service.update_summary_memory(
+                latest_file = event.files[-1]
+                self.chat_session_service.update_last_uploaded_file(
                     chat_id=event.chat_id,
-                    summary_memory=f"用户已确认材料，任务 {current_task_id} 已进入 processing",
+                    file_name=latest_file.file_name,
+                    file_key=latest_file.file_key,
                 )
 
-                self._send_task_text(
-                    event.chat_id,
-                    current_task_id,
-                    "🔄 当前正在解析试卷结构并切题......",
+            current_task_id = session.get("current_task_id")
+            bound_task = self.task_service.get_task(current_task_id) if current_task_id else None
+
+            # 不再因为普通文本消息自动解绑 completed / failed / cancelled 任务
+            waiting_for = session.get("waiting_for")
+
+            if event.event_type == "text":
+                # follow-up 模式下：
+                # 只有确认 / 拒绝继续留在 follow-up 分流里；
+                # 其他文本一律视为新的业务命令，先清掉 waiting_for 再继续。
+                if waiting_for:
+                    if self.confirmation_policy.is_confirm_message(event.user_message):
+                        if waiting_for == "rerun_cut_followup":
+                            return self._handle_rerun_cut_followup(
+                                event=event,
+                                current_task_id=current_task_id,
+                            )
+
+                        if waiting_for == "rerun_analysis_followup":
+                            return self._handle_rerun_analysis_followup(
+                                event=event,
+                                current_task_id=current_task_id,
+                            )
+
+                        if waiting_for == "rerun_excel_followup":
+                            return self._handle_rerun_excel_followup(
+                                event=event,
+                                current_task_id=current_task_id,
+                            )
+
+                        if waiting_for == "rerun_package_followup":
+                            return self._handle_rerun_package_followup(
+                                event=event,
+                                current_task_id=current_task_id,
+                            )
+
+                    if self.confirmation_policy.is_reject_message(event.user_message):
+                        if waiting_for == "rerun_cut_followup":
+                            return self._handle_rerun_cut_followup(
+                                event=event,
+                                current_task_id=current_task_id,
+                            )
+
+                        if waiting_for == "rerun_analysis_followup":
+                            return self._handle_rerun_analysis_followup(
+                                event=event,
+                                current_task_id=current_task_id,
+                            )
+
+                        if waiting_for == "rerun_excel_followup":
+                            return self._handle_rerun_excel_followup(
+                                event=event,
+                                current_task_id=current_task_id,
+                            )
+
+                        if waiting_for == "rerun_package_followup":
+                            return self._handle_rerun_package_followup(
+                                event=event,
+                                current_task_id=current_task_id,
+                            )
+
+                    # 非确认 / 拒绝，默认视为新命令
+                    self.chat_session_service.clear_waiting_for(event.chat_id)
+                    waiting_for = None
+
+                if self._is_cancel_empty_tasks_message(event.user_message):
+                    return self._handle_cancel_empty_tasks(
+                        chat_id=event.chat_id,
+                        current_task_id=current_task_id,
+                    )
+
+                if self._is_cancel_missing_tasks_message(event.user_message):
+                    return self._handle_cancel_missing_tasks(
+                        chat_id=event.chat_id,
+                        current_task_id=current_task_id,
+                    )
+
+                if self._is_cancel_message(event.user_message):
+                    return self._handle_cancel_current_task(
+                        chat_id=event.chat_id,
+                        task_id=current_task_id,
+                    )
+
+                if self._is_restart_message(event.user_message):
+                    return self._handle_restart_current_task(
+                        chat_id=event.chat_id,
+                        current_task_id=current_task_id,
+                    )
+
+                if self._is_current_task_rerun_cut_query(event.user_message):
+                    return self._handle_current_task_rerun_cut(
+                        chat_id=event.chat_id,
+                        current_task_id=current_task_id,
+                    )
+
+                if self._is_current_task_rerun_analysis_query(event.user_message):
+                    return self._handle_current_task_rerun_analysis(
+                        chat_id=event.chat_id,
+                        current_task_id=current_task_id,
+                    )
+
+                if self._is_current_task_rerun_excel_query(event.user_message):
+                    return self._handle_current_task_rerun_excel(
+                        chat_id=event.chat_id,
+                        current_task_id=current_task_id,
+                    )
+
+                if self._is_current_task_repackage_query(event.user_message):
+                    return self._handle_current_task_repackage(
+                        chat_id=event.chat_id,
+                        current_task_id=current_task_id,
+                    )
+
+                if self._is_current_task_rerun_manifest_query(event.user_message):
+                    return self._handle_current_task_rerun_manifest(
+                        chat_id=event.chat_id,
+                        current_task_id=current_task_id,
+                    )
+
+                if self._is_current_task_redeliver_query(event.user_message):
+                    return self._handle_current_task_redeliver(
+                        chat_id=event.chat_id,
+                        current_task_id=current_task_id,
+                    )
+
+                if self._is_latest_completed_redeliver_query(event.user_message):
+                    return self._handle_latest_completed_task_redeliver(
+                        chat_id=event.chat_id,
+                        current_task_id=current_task_id,
+                    )
+
+                if self._is_current_task_result_query(event.user_message):
+                    return self._handle_current_task_result_query(
+                        chat_id=event.chat_id,
+                        current_task_id=current_task_id,
+                    )
+
+                if self._is_missing_materials_query(event.user_message):
+                    return self._handle_missing_materials_query(
+                        chat_id=event.chat_id,
+                        current_task_id=current_task_id,
+                    )
+
+                if self._is_result_query(event.user_message):
+                    return self._handle_result_query(
+                        chat_id=event.chat_id,
+                        current_task_id=current_task_id,
+                    )
+
+                if self._is_current_task_status_query(event.user_message):
+                    return self._handle_current_task_status_query(
+                        chat_id=event.chat_id,
+                        current_task_id=current_task_id,
+                    )
+
+            if event.event_type == "file_upload" and event.files:
+                target_task_id, handoff_message = self._resolve_task_for_file_upload(
+                    chat_id=event.chat_id,
+                    current_task_id=current_task_id,
+                    bound_task=bound_task,
+                    latest_uploaded_file_name=event.files[-1].file_name if event.files else None,
                 )
 
-                work_dir = str(settings.tasks_dir)
+                if handoff_message:
+                    self.feishu_message_sender.send_text(
+                        event.chat_id,
+                        handoff_message,
+                    )
 
-                process_tool_call = ToolCall(
-                    tool_name="process_paper",
+                tool_call = ToolCall(
+                    tool_name="ingest_materials",
                     tool_args={
-                        "task_id": current_task_id,
-                        "work_dir": work_dir,
+                        "task_id": target_task_id,
+                        "files": [
+                            {
+                                "file_name": item.file_name,
+                                "file_key": item.file_key,
+                                "mime_type": item.mime_type,
+                                "message_id": item.message_id,
+                            }
+                            for item in event.files
+                        ],
                     },
                 )
 
-                process_result = self.tool_executor.execute(process_tool_call)
-                if not process_result.success:
-                    snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
-                    return AgentResult(
-                        status="failed",
-                        message=f"process_paper 执行失败：{process_result.message}",
-                        task_id=current_task_id,
-                        snapshot=snapshot,
-                    )
-
-                task_root = process_result.data.get("task_root")
-                question_output_root = process_result.data.get("question_output_root")
-                analysis_output_root = process_result.data.get("analysis_output_root")
-                cleaned_output_root = process_result.data.get("cleaned_output_root")
-                blank_pdf_path = process_result.data.get("blank_pdf_path")
-
-                self._send_task_text(
-                    event.chat_id,
-                    current_task_id,
-                    "🔄 试卷结构解析已完成！当前正在提取答案与知识点，用于填写 Excel 表格 (耗时1-2分钟，请耐心等待) ......",
+                tool_result, failure_result = self._execute_tool_or_fail(
+                    chat_id=event.chat_id,
+                    task_id=target_task_id,
+                    tool_call=tool_call,
+                    step_name="登记材料并下载文件",
                 )
+                if failure_result:
+                    return failure_result
 
-                manifest_path = str(Path(task_root) / "manifest" / "manifest.json")
-
-                manifest_tool_call = ToolCall(
-                    tool_name="build_manifest",
-                    tool_args={
-                        "task_id": current_task_id,
-                        "question_root_dir": question_output_root,
-                        "analysis_root_dir": analysis_output_root,
-                        "cleaned_analysis_root_dir": cleaned_output_root,
-                        "output_path": manifest_path,
-                    },
-                )
-
-                manifest_result = self.tool_executor.execute(manifest_tool_call)
-                if not manifest_result.success:
-                    snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
-                    return AgentResult(
-                        status="failed",
-                        message=f"build_manifest 执行失败：{manifest_result.message}",
-                        task_id=current_task_id,
-                        snapshot=snapshot,
-                    )
-
-                manifest_path = manifest_result.data.get("manifest_path", manifest_path)
-
-                self._send_task_text(
-                    event.chat_id,
-                    current_task_id,
-                    "🔄 答案与知识点解析已完成！当前正在填写 Excel 表格 (tags.xlsx)......",
-                )
-
-                excel_path = str(Path(task_root) / "excel" / f"{current_task_id}.xlsx")
-
-                excel_tool_call = ToolCall(
-                    tool_name="write_excel",
-                    tool_args={
-                        "task_id": current_task_id,
-                        "manifest_path": manifest_path,
-                        "output_path": excel_path,
-                        "school": "",
-                        "year": "",
-                        "paper_note": "",
-                    },
-                )
-
-                excel_result = self.tool_executor.execute(excel_tool_call)
-                if not excel_result.success:
-                    snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
-                    return AgentResult(
-                        status="failed",
-                        message=f"write_excel 执行失败：{excel_result.message}",
-                        task_id=current_task_id,
-                        snapshot=snapshot,
-                    )
-
-                excel_path = excel_result.data.get("excel_path", excel_path)
-
-                self._send_task_text(
-                    event.chat_id,
-                    current_task_id,
-                    "🔄 Excel 表格已填写完成！当前正在打包所有资料......",
-                )
-
-                package_tool_call = ToolCall(
-                    tool_name="package_results",
-                    tool_args={
-                        "task_id": current_task_id,
-                        "task_root": str(settings.tasks_dir),
-                        "excel_path": excel_path,
-                        "question_dir": question_output_root,
-                        "analysis_dir": analysis_output_root,
-                        "cleaned_analysis_dir": cleaned_output_root,
-                        "manifest_path": manifest_path,
-                        "source_pdf_path": blank_pdf_path,
-                    },
-                )
-
-                package_result = self.tool_executor.execute(package_tool_call)
-                if not package_result.success:
-                    snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
-                    return AgentResult(
-                        status="failed",
-                        message=f"package_results 执行失败：{package_result.message}",
-                        task_id=current_task_id,
-                        snapshot=snapshot,
-                    )
-
-                local_package_path = package_result.data.get("local_package_path")
-                package_name = package_result.data.get("package_name") or ""
-                package_contents = package_result.data.get("package_contents") or []
-                if not local_package_path:
-                    snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
-                    return AgentResult(
-                        status="failed",
-                        message="package_results 成功但没有返回 local_package_path",
-                        task_id=current_task_id,
-                        snapshot=snapshot,
-                    )
-
-                self._send_task_text(
-                    event.chat_id,
-                    current_task_id,
-                    "🔄 所有材料均已打包完成！当前正在上传到飞书云盘文件夹......",
-                )
-
-                deliver_tool_call = ToolCall(
-                    tool_name="deliver_results",
-                    tool_args={
-                        "task_id": current_task_id,
-                        "local_package_path": local_package_path,
-                    },
-                )
-
-                deliver_result = self.tool_executor.execute(deliver_tool_call)
-                print("DELIVER_RESULT_DATA =", deliver_result.data)
                 snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
-
-                if not deliver_result.success:
-                    return AgentResult(
-                        status="failed",
-                        message=f"deliver_results 执行失败：{deliver_result.message}",
-                        task_id=current_task_id,
-                        snapshot=snapshot,
-                    )
-
-                remote_url = (
-                    deliver_result.data.get("record", {}) or {}
-                ).get("remote_url") or (
-                    deliver_result.data.get("upload_result", {}) or {}
-                ).get("root_folder_url", "")
-
-                self.chat_session_service.update_summary_memory(
-                    chat_id=event.chat_id,
-                    summary_memory=f"任务 {current_task_id} 已完成完整处理链并上传飞书",
-                )
-
-                finish_text_parts = [
-                    self._with_task_prefix(current_task_id, "🎉 处理完成！"),
-                    "",
-                ]
-
-                if package_name:
-                    finish_text_parts.extend([
-                        "📁 交付文件夹：",
-                        package_name,
-                        "",
-                    ])
-
-                if package_contents:
-                    finish_text_parts.extend([
-                        "📦 包含内容：",
-                        *[f"- {item}" for item in package_contents],
-                        "",
-                    ])
-
-                if remote_url:
-                    finish_text_parts.extend([
-                        "🔗 查看结果：",
-                        remote_url,
-                        "",
-                    ])
-                else:
-                    finish_text_parts.extend([
-                        "结果已上传到飞书云盘。若你这边暂时没看到链接，我可以继续帮你检查上传返回信息。",
-                        "",
-                    ])
-
-                finish_text_parts.append("如需重新处理、修改或补充材料，可以直接告诉我。")
-
-                self.feishu_message_sender.send_text(
-                    event.chat_id,
-                    "\n".join(finish_text_parts),
-                )
-
-                result_message = self._with_task_prefix(current_task_id, "处理完成，结果已上传。")
-
-                if package_name:
-                    result_message += f"\n交付文件夹：{package_name}"
-
-                if remote_url:
-                    result_message += f"\n查看链接：{remote_url}"
 
                 return AgentResult(
                     status="ok",
-                    message=result_message,
-                    task_id=current_task_id,
+                    message=tool_result.message,
+                    task_id=target_task_id,
                     snapshot=snapshot,
                 )
 
-            if self.confirmation_policy.is_reject_message(event.user_message):
-                tool_call = ToolCall(
-                    tool_name="manage_task",
-                    tool_args={
-                        "action": "advance_stage",
-                        "task_id": current_task_id,
-                        "target_stage": "collecting_materials",
-                        "next_action_hint": "等待用户重新上传或补充材料",
-                    },
+            if not current_task_id and event.event_type == "file_upload":
+                task = self.task_service.create_task(
+                    chat_id=event.chat_id,
+                    created_by="agent",
+                )
+                current_task_id = task["task_id"]
+
+                self.chat_session_service.bind_task(
+                    chat_id=event.chat_id,
+                    task_id=current_task_id,
                 )
 
-                tool_result = self.tool_executor.execute(tool_call)
-                self.chat_session_service.set_waiting_for(
-                    event.chat_id,
-                    "materials_upload",
-                )
                 self.chat_session_service.update_summary_memory(
                     chat_id=event.chat_id,
-                    summary_memory=f"用户认为材料有问题，任务 {current_task_id} 已退回 collecting_materials",
+                    summary_memory=f"已自动创建任务 {current_task_id}",
                 )
 
+            snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
+            current_stage = snapshot.get("current_stage")
+
+            if (
+                    current_stage == TaskState.WAITING_CONFIRMATION.value
+                    and event.event_type == "text"
+            ):
+                if self.confirmation_policy.is_confirm_message(event.user_message):
+                    self.feishu_message_sender.send_text(
+                        event.chat_id,
+                        self._with_task_prefix(
+                            current_task_id,
+                            "✅ 已确认材料，开始处理试卷。\n\n"
+                            "我会依次完成：\n"
+                            "- 试卷结构解析与切题\n"
+                            "- 答案与知识点提取\n"
+                            "- 结果整理并上传\n\n"
+                            "请稍候，处理中...",
+                        ),
+                    )
+
+                    stage_tool_call = ToolCall(
+                        tool_name="manage_task",
+                        tool_args={
+                            "action": "advance_stage",
+                            "task_id": current_task_id,
+                            "target_stage": "processing",
+                            "next_action_hint": "开始执行完整处理链",
+                        },
+                    )
+
+                    stage_result, failure_result = self._execute_tool_or_fail(
+                        chat_id=event.chat_id,
+                        task_id=current_task_id,
+                        tool_call=stage_tool_call,
+                        step_name="更新任务状态",
+                    )
+                    if failure_result:
+                        return failure_result
+
+                    self.chat_session_service.clear_waiting_for(event.chat_id)
+                    self.chat_session_service.update_summary_memory(
+                        chat_id=event.chat_id,
+                        summary_memory=f"用户已确认材料，任务 {current_task_id} 已进入 processing",
+                    )
+
+                    self._send_task_text(
+                        event.chat_id,
+                        current_task_id,
+                        "🔄 当前正在解析试卷结构并切题......",
+                    )
+
+                    work_dir = str(settings.tasks_dir)
+
+                    process_tool_call = ToolCall(
+                        tool_name="process_paper",
+                        tool_args={
+                            "task_id": current_task_id,
+                            "work_dir": work_dir,
+                        },
+                    )
+
+                    process_result, failure_result = self._execute_tool_or_fail(
+                        chat_id=event.chat_id,
+                        task_id=current_task_id,
+                        tool_call=process_tool_call,
+                        step_name="试卷结构解析与切题",
+                    )
+                    if failure_result:
+                        return failure_result
+
+                    task_root = process_result.data.get("task_root")
+                    question_output_root = process_result.data.get("question_output_root")
+                    analysis_output_root = process_result.data.get("analysis_output_root")
+                    cleaned_output_root = process_result.data.get("cleaned_output_root")
+                    blank_pdf_path = process_result.data.get("blank_pdf_path")
+
+                    self._send_task_text(
+                        event.chat_id,
+                        current_task_id,
+                        "🔄 试卷结构解析已完成！当前正在提取答案与知识点，用于填写 Excel 表格 (耗时1-2分钟，请耐心等待) ......",
+                    )
+
+                    manifest_path = str(Path(task_root) / "manifest" / "manifest.json")
+
+                    manifest_tool_call = ToolCall(
+                        tool_name="build_manifest",
+                        tool_args={
+                            "task_id": current_task_id,
+                            "question_root_dir": question_output_root,
+                            "analysis_root_dir": analysis_output_root,
+                            "cleaned_analysis_root_dir": cleaned_output_root,
+                            "output_path": manifest_path,
+                        },
+                    )
+
+                    manifest_result, failure_result = self._execute_tool_or_fail(
+                        chat_id=event.chat_id,
+                        task_id=current_task_id,
+                        tool_call=manifest_tool_call,
+                        step_name="分析答案和知识点",
+                    )
+                    if failure_result:
+                        return failure_result
+
+                    manifest_path = manifest_result.data.get("manifest_path", manifest_path)
+
+                    self._send_task_text(
+                        event.chat_id,
+                        current_task_id,
+                        "🔄 答案与知识点解析已完成！当前正在填写 Excel 表格 (tags.xlsx)......",
+                    )
+
+                    excel_path = str(Path(task_root) / "excel" / f"{current_task_id}.xlsx")
+
+                    excel_tool_call = ToolCall(
+                        tool_name="write_excel",
+                        tool_args={
+                            "task_id": current_task_id,
+                            "manifest_path": manifest_path,
+                            "output_path": excel_path,
+                            "school": "",
+                            "year": "",
+                            "paper_note": "",
+                        },
+                    )
+
+                    excel_result, failure_result = self._execute_tool_or_fail(
+                        chat_id=event.chat_id,
+                        task_id=current_task_id,
+                        tool_call=excel_tool_call,
+                        step_name="生成 Excel 表格",
+                    )
+                    if failure_result:
+                        return failure_result
+
+                    excel_path = excel_result.data.get("excel_path", excel_path)
+
+                    self._send_task_text(
+                        event.chat_id,
+                        current_task_id,
+                        "🔄 Excel 表格已填写完成！当前正在打包所有资料......",
+                    )
+
+                    package_tool_call = ToolCall(
+                        tool_name="package_results",
+                        tool_args={
+                            "task_id": current_task_id,
+                            "task_root": str(settings.tasks_dir),
+                            "excel_path": excel_path,
+                            "question_dir": question_output_root,
+                            "analysis_dir": analysis_output_root,
+                            "cleaned_analysis_dir": cleaned_output_root,
+                            "manifest_path": manifest_path,
+                            "source_pdf_path": blank_pdf_path,
+                        },
+                    )
+
+                    package_result, failure_result = self._execute_tool_or_fail(
+                        chat_id=event.chat_id,
+                        task_id=current_task_id,
+                        tool_call=package_tool_call,
+                        step_name="整理并打包结果",
+                    )
+                    if failure_result:
+                        return failure_result
+
+                    local_package_path = package_result.data.get("local_package_path")
+                    package_name = package_result.data.get("package_name") or ""
+                    package_contents = package_result.data.get("package_contents") or []
+
+                    if not local_package_path:
+                        return self._finalize_failure(
+                            chat_id=event.chat_id,
+                            task_id=current_task_id,
+                            user_message="整理并打包结果失败：未生成本地交付目录。",
+                            internal_message="package_results succeeded but local_package_path is empty",
+                            step_name="整理并打包结果",
+                            notify_user=False,
+                        )
+
+                    self._send_task_text(
+                        event.chat_id,
+                        current_task_id,
+                        "🔄 所有材料均已打包完成！当前正在上传到飞书云盘文件夹......",
+                    )
+
+                    deliver_tool_call = ToolCall(
+                        tool_name="deliver_results",
+                        tool_args={
+                            "task_id": current_task_id,
+                            "local_package_path": local_package_path,
+                        },
+                    )
+
+                    deliver_result, failure_result = self._execute_tool_or_fail(
+                        chat_id=event.chat_id,
+                        task_id=current_task_id,
+                        tool_call=deliver_tool_call,
+                        step_name="上传交付结果",
+                    )
+                    if failure_result:
+                        return failure_result
+
+                    snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
+
+                    remote_url = (
+                            (deliver_result.data.get("record", {}) or {}).get("remote_url")
+                            or (deliver_result.data.get("upload_result", {}) or {}).get("root_folder_url", "")
+                    )
+
+                    self.chat_session_service.update_summary_memory(
+                        chat_id=event.chat_id,
+                        summary_memory=f"任务 {current_task_id} 已完成完整处理链并上传飞书",
+                    )
+
+                    finish_text_parts = [
+                        self._with_task_prefix(current_task_id, "🎉 处理完成！"),
+                        "",
+                    ]
+
+                    if package_name:
+                        finish_text_parts.extend([
+                            "📁 交付文件夹：",
+                            package_name,
+                            "",
+                        ])
+
+                    if package_contents:
+                        finish_text_parts.extend([
+                            "📦 包含内容：",
+                            *[f"- {item}" for item in package_contents],
+                            "",
+                        ])
+
+                    if remote_url:
+                        finish_text_parts.extend([
+                            "🔗 查看结果：",
+                            remote_url,
+                            "",
+                        ])
+                    else:
+                        finish_text_parts.extend([
+                            "结果已上传到飞书云盘。若你这边暂时没看到链接，我可以继续帮你检查上传返回信息。",
+                            "",
+                        ])
+
+                    finish_text_parts.append("如需重新处理、修改或补充材料，可以直接告诉我。")
+
+                    self.feishu_message_sender.send_text(
+                        event.chat_id,
+                        "\n".join(finish_text_parts),
+                    )
+
+                    result_message = self._with_task_prefix(current_task_id, "处理完成，结果已上传。")
+                    if package_name:
+                        result_message += f"\n交付文件夹：{package_name}"
+                    if remote_url:
+                        result_message += f"\n查看链接：{remote_url}"
+
+                    return AgentResult(
+                        status="ok",
+                        message=result_message,
+                        task_id=current_task_id,
+                        snapshot=snapshot,
+                    )
+
+                if self.confirmation_policy.is_reject_message(event.user_message):
+                    tool_call = ToolCall(
+                        tool_name="manage_task",
+                        tool_args={
+                            "action": "advance_stage",
+                            "task_id": current_task_id,
+                            "target_stage": "collecting_materials",
+                            "next_action_hint": "等待用户重新上传或补充材料",
+                        },
+                    )
+
+                    tool_result, failure_result = self._execute_tool_or_fail(
+                        chat_id=event.chat_id,
+                        task_id=current_task_id,
+                        tool_call=tool_call,
+                        step_name="退回材料收集阶段",
+                    )
+                    if failure_result:
+                        return failure_result
+
+                    self.chat_session_service.set_waiting_for(
+                        event.chat_id,
+                        "materials_upload",
+                    )
+                    self.chat_session_service.update_summary_memory(
+                        chat_id=event.chat_id,
+                        summary_memory=f"用户认为材料有问题，任务 {current_task_id} 已退回 collecting_materials",
+                    )
+
+                    snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
+
+                    return AgentResult(
+                        status="ok",
+                        message="好的，请重新上传或补充正确的 空白试卷文件 / 解析试卷文件。",
+                        task_id=current_task_id,
+                        snapshot=snapshot,
+                    )
+
                 snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
+                return self._run_planner_flow(
+                    event=event,
+                    snapshot=snapshot,
+                    task_id=current_task_id,
+                )
+
+            elif current_stage == TaskState.COLLECTING_MATERIALS.value:
+                if event.event_type == "text":
+                    snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
+                    return self._run_planner_flow(
+                        event=event,
+                        snapshot=snapshot,
+                        task_id=current_task_id,
+                    )
 
                 return AgentResult(
-                    status="ok" if tool_result.success else "failed",
-                    message="好的，请重新上传或补充正确的 空白试卷文件 / 解析试卷文件。",
+                    status="ok",
+                    message="请上传空白试卷 PDF 和答案解析 PDF，我会继续处理。支持一次上传一个，也支持一次上传多个文件。",
                     task_id=current_task_id,
                     snapshot=snapshot,
                 )
 
+            elif current_stage == TaskState.PROCESSING.value:
+                if event.event_type == "text":
+                    snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
+                    return self._run_planner_flow(
+                        event=event,
+                        snapshot=snapshot,
+                        task_id=current_task_id,
+                    )
+
+                task_memory = snapshot.get("task_memory") or {}
+                processing_summary = task_memory.get("processing_summary") or "当前任务正在处理中。"
+                next_action_hint = task_memory.get("next_action_hint") or ""
+
+                status_text = self._with_task_prefix(current_task_id, processing_summary)
+                if next_action_hint:
+                    status_text += f"\n下一步：{next_action_hint}"
+
+                return AgentResult(
+                    status="ok",
+                    message=status_text,
+                    task_id=current_task_id,
+                    snapshot=snapshot,
+                )
+
+            # fallback：未命中任何已知 stage，交给 planner 兜底
             snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
             return self._run_planner_flow(
                 event=event,
@@ -2478,49 +2618,12 @@ class AgentOrchestrator:
                 task_id=current_task_id,
             )
 
-        if current_stage == TaskState.COLLECTING_MATERIALS.value:
-            if event.event_type == "text":
-                snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
-                return self._run_planner_flow(
-                    event=event,
-                    snapshot=snapshot,
-                    task_id=current_task_id,
-                )
-
-            return AgentResult(
-                status="ok",
-                message="请上传空白试卷 PDF 和答案解析 PDF，我会继续处理。支持一次上传一个，也支持一次上传多个文件。",
+        except Exception as e:
+            return self._finalize_failure(
+                chat_id=event.chat_id,
                 task_id=current_task_id,
-                snapshot=snapshot,
+                user_message="系统处理过程中发生异常，当前流程已停止。请稍后重试，或回复“当前任务状态”查看情况。",
+                internal_message=repr(e),
+                step_name="handle_event",
+                notify_user=False,
             )
-
-        if current_stage == TaskState.PROCESSING.value:
-            if event.event_type == "text":
-                snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
-                return self._run_planner_flow(
-                    event=event,
-                    snapshot=snapshot,
-                    task_id=current_task_id,
-                )
-
-            task_memory = snapshot.get("task_memory") or {}
-            processing_summary = task_memory.get("processing_summary") or "当前任务正在处理中。"
-            next_action_hint = task_memory.get("next_action_hint") or ""
-
-            status_text = self._with_task_prefix(current_task_id, processing_summary)
-            if next_action_hint:
-                status_text += f"\n下一步：{next_action_hint}"
-
-            return AgentResult(
-                status="ok",
-                message=status_text,
-                task_id=current_task_id,
-                snapshot=snapshot,
-            )
-
-        snapshot = self.memory_facade.build_agent_snapshot(event.chat_id)
-        return self._run_planner_flow(
-            event=event,
-            snapshot=snapshot,
-            task_id=current_task_id,
-        )

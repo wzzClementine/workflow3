@@ -57,6 +57,14 @@ def _update_event_status(
     )
 
 
+def _safe_send_text(feishu_message_sender, chat_id: str, text: str) -> None:
+    try:
+        feishu_message_sender.send_text(chat_id, text)
+    except Exception:
+        # 通知失败不能再把主流程打崩
+        traceback.print_exc()
+
+
 def _run_event(
     orchestrator,
     sqlite_manager,
@@ -67,9 +75,10 @@ def _run_event(
     try:
         result = orchestrator.handle_event(event)
 
-        # 将普通文本类 AgentResult 发回飞书
+        # 将 AgentResult 发回飞书
         if getattr(result, "message", None):
-            feishu_message_sender.send_text(
+            _safe_send_text(
+                feishu_message_sender,
                 event.chat_id,
                 result.message,
             )
@@ -88,16 +97,34 @@ def _run_event(
                 ensure_ascii=False,
             ),
         )
+
     except Exception as e:
         traceback.print_exc()
+
+        # 先落库，标记本次 webhook 事件失败
         _update_event_status(
             sqlite_manager,
             event_id=event_id,
             status="failed",
             detail_json=json.dumps(
-                {"error": str(e)},
+                {
+                    "error": str(e),
+                    "exception_type": type(e).__name__,
+                },
                 ensure_ascii=False,
             ),
+        )
+
+        # 再给飞书用户一个兜底失败通知，避免用户端一直停留在“正在执行”
+        fallback_message = (
+            "❌ 系统处理过程中发生异常，当前流程已停止。\n"
+            "请稍后重试，或回复“当前任务状态”查看情况。"
+        )
+
+        _safe_send_text(
+            feishu_message_sender,
+            event.chat_id,
+            fallback_message,
         )
 
 
